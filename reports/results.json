@@ -1,0 +1,282 @@
+[
+  {
+    "revenue": 1293.0,
+    "rejected": 38,
+    "rejection_rate": 0.041349292709466814,
+    "wait_avg": 0.2940890220275345,
+    "sojourn_avg": 9.601846712001961,
+    "served": 862,
+    "arrivals": 919,
+    "occ": {
+      "P1": 0.0,
+      "P2": 0.8503702221360054
+    },
+    "seed": 42
+  },
+  {
+    "revenue": 1371.0,
+    "rejected": 64,
+    "rejection_rate": 0.06406406406406406,
+    "wait_avg": 0.42230660523671404,
+    "sojourn_avg": 9.67825351703964,
+    "served": 914,
+    "arrivals": 999,
+    "occ": {
+      "P1": 0.0,
+      "P2": 0.8970147760168923
+    },
+    "seed": 43
+  },
+  {
+    "revenue": 1327.5,
+    "rejected": 65,
+    "rejection_rate": 0.06735751295336788,
+    "wait_avg": 0.4445612353565126,
+    "sojourn_avg": 9.847892874324561,
+    "served": 885,
+    "arrivals": 965,
+    "occ": {
+      "P1": 0.0,
+      "P2": 0.874902563923812
+    },
+    "seed": 44
+  },
+  {
+    "revenue": 1338.0,
+    "rejected": 34,
+    "rejection_rate": 0.035864978902953586,
+    "wait_avg": 0.258249133996392,
+    "sojourn_avg": 9.277926906022566,
+    "served": 892,
+    "arrivals": 948,
+    "occ": {
+      "P1": 0.0,
+      "P2": 0.8573233830418842
+    },
+    "seed": 45
+  },
+  {
+    "revenue": 1294.5,
+    "rejected": 64,
+    "rejection_rate": 0.06743940990516333,
+    "wait_avg": 0.43320842738877424,
+    "sojourn_avg": 9.845854083542875,
+    "served": 863,
+    "arrivals": 949,
+    "occ": {
+      "P1": 0.0,
+      "P2": 0.8604325386019511
+    },
+    "seed": 46
+  },
+  {
+    "revenue": 1311.0,
+    "rejected": 53,
+    "rejection_rate": 0.05626326963906582,
+    "wait_avg": 0.3811288123122207,
+    "sojourn_avg": 9.792396878564015,
+    "served": 874,
+    "arrivals": 942,
+    "occ": {
+      "P1": 0.0,
+      "P2": 0.8752612122291833
+    },
+    "seed": 47
+  },
+  {
+    "revenue": 1254.0,
+    "rejected": 75,
+    "rejection_rate": 0.08047210300429185,
+    "wait_avg": 0.4176425376980453,
+    "sojourn_avg": 10.084668390452329,
+    "served": 836,
+    "arrivals": 932,
+    "occ": {
+      "P1": 0.0,
+      "P2": 0.866627564429815
+    },
+    "seed": 48
+  },
+  {
+    "revenue": 1347.0,
+    "rejected": 82,
+    "rejection_rate": 0.08159203980099503,
+    "wait_avg": 0.3491122682433538,
+    "sojourn_avg": 9.554291403847099,
+    "served": 898,
+    "arrivals": 1005,
+    "occ": {
+      "P1": 0.0,
+      "P2": 0.8798858203500964
+    },
+    "seed": 49
+  },
+  {
+    "revenue": 1344.0,
+    "rejected": 30,
+    "rejection_rate": 0.03171247357293869,
+    "wait_avg": 0.2676513903723454,
+    "sojourn_avg": 9.382650273827855,
+    "served": 896,
+    "arrivals": 946,
+    "occ": {
+      "P1": 0.0,
+      "P2": 0.8690682735090133
+    },
+    "seed": 50
+  },
+  {
+    "revenue": 1312.5,
+    "rejected": 66,
+    "rejection_rate": 0.06875,
+    "wait_avg": 0.3953540003344676,
+    "sojourn_avg": 9.709963212511735,
+    "served": 875,
+    "arrivals": 960,
+    "occ": {
+      "P1": 0.0,
+      "P2": 0.8623862222215833
+    },
+    "seed": 51
+  },
+  {
+    "revenue": 1261.5,
+    "rejected": 62,
+    "rejection_rate": 0.06746463547334058,
+    "wait_avg": 0.2893604930387867,
+    "sojourn_avg": 9.642312734046524,
+    "served": 841,
+    "arrivals": 919,
+    "occ": {
+      "P1": 0.0,
+      "P2": 0.8278341539248288
+    },
+    "seed": 52
+  },
+  {
+    "revenue": 1315.5,
+    "rejected": 70,
+    "rejection_rate": 0.07231404958677685,
+    "wait_avg": 0.44712145027751976,
+    "sojourn_avg": 9.97868783826451,
+    "served": 877,
+    "arrivals": 968,
+    "occ": {
+      "P1": 0.0,
+      "P2": 0.8805405120827442
+    },
+    "seed": 53
+  },
+  {
+    "revenue": 1299.0,
+    "rejected": 47,
+    "rejection_rate": 0.05059203444564048,
+    "wait_avg": 0.27099318923575416,
+    "sojourn_avg": 9.52032818376215,
+    "served": 866,
+    "arrivals": 929,
+    "occ": {
+      "P1": 0.0,
+      "P2": 0.8422723826561616
+    },
+    "seed": 54
+  },
+  {
+    "revenue": 1296.0,
+    "rejected": 60,
+    "rejection_rate": 0.06369426751592357,
+    "wait_avg": 0.3112493245058237,
+    "sojourn_avg": 9.880361379095495,
+    "served": 864,
+    "arrivals": 942,
+    "occ": {
+      "P1": 0.0,
+      "P2": 0.877986739265166
+    },
+    "seed": 55
+  },
+  {
+    "revenue": 1320.0,
+    "rejected": 53,
+    "rejection_rate": 0.05567226890756303,
+    "wait_avg": 0.3451004300790091,
+    "sojourn_avg": 9.51961396710331,
+    "served": 880,
+    "arrivals": 952,
+    "occ": {
+      "P1": 0.0,
+      "P2": 0.8563579823982453
+    },
+    "seed": 56
+  },
+  {
+    "revenue": 1353.0,
+    "rejected": 51,
+    "rejection_rate": 0.05246913580246913,
+    "wait_avg": 0.37297729595346496,
+    "sojourn_avg": 9.623551928280033,
+    "served": 902,
+    "arrivals": 972,
+    "occ": {
+      "P1": 0.0,
+      "P2": 0.8894552028545037
+    },
+    "seed": 57
+  },
+  {
+    "revenue": 1306.5,
+    "rejected": 31,
+    "rejection_rate": 0.03344120819848975,
+    "wait_avg": 0.273548616583825,
+    "sojourn_avg": 9.34062105397879,
+    "served": 871,
+    "arrivals": 927,
+    "occ": {
+      "P1": 0.0,
+      "P2": 0.8433094950328582
+    },
+    "seed": 58
+  },
+  {
+    "revenue": 1294.5,
+    "rejected": 62,
+    "rejection_rate": 0.06581740976645435,
+    "wait_avg": 0.3068595835084564,
+    "sojourn_avg": 9.89657308405601,
+    "served": 863,
+    "arrivals": 942,
+    "occ": {
+      "P1": 0.0,
+      "P2": 0.8739635846502884
+    },
+    "seed": 59
+  },
+  {
+    "revenue": 1320.0,
+    "rejected": 89,
+    "rejection_rate": 0.09017223910840932,
+    "wait_avg": 0.5169716807087208,
+    "sojourn_avg": 10.037051870812236,
+    "served": 880,
+    "arrivals": 987,
+    "occ": {
+      "P1": 0.0,
+      "P2": 0.8854142956823817
+    },
+    "seed": 60
+  },
+  {
+    "revenue": 1365.0,
+    "rejected": 41,
+    "rejection_rate": 0.042355371900826444,
+    "wait_avg": 0.32455079476259036,
+    "sojourn_avg": 9.487219681084612,
+    "served": 910,
+    "arrivals": 968,
+    "occ": {
+      "P1": 0.0,
+      "P2": 0.8778875123056408
+    },
+    "seed": 61
+  }
+]

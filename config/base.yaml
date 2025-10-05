@@ -1,0 +1,10 @@
+seed: 42
+T: 480            
+arrival_rate: 2.0 # λ por minuto (procura alta)
+duration_lognorm: {mean: 2.0, sigma: 0.7}  # minutos, lognormal
+lots:
+  - {name: P1, capacity: 30, price: 2.0, distance: 2}
+  - {name: P2, capacity: 20, price: 1.5, distance: 5}
+policy: fcfs
+max_wait: 2      # minutos máximos de espera na fila
+runs: 20          # nº de repetições (seeds)
