@@ -19,11 +19,12 @@ def main():
 
     # ocupação média por parque
     from collections import defaultdict
-    occ_sum, n = defaultdict(float), len(results)
+    price_sum, n = defaultdict(float), len(results)
     for r in results:
-        for lot, v in r["occ"].items():
-            occ_sum[lot] += v
-    print("Occupancy avg:", {k: round(v/n, 3) for k, v in occ_sum.items()})
+        for lot, v in r["avg_price"].items():
+            price_sum[lot] += v
+    print("Avg price:", {k: round(v/n, 2) for k, v in price_sum.items()})
+
     rej = [x["rejection_rate"] for x in results]
     rev = [x["revenue"] for x in results]
     wait = [x["wait_avg"] for x in results]
