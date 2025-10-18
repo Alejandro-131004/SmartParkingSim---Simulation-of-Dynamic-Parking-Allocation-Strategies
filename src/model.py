@@ -59,19 +59,10 @@ class Stats:
             "occ_lots": occ,
             "occ_global": occ_global,
             "avg_price": avg_price,
-            "energy_total": self.energy_delivered,  # NEW
-            "ev_served": self.ev_served,            # NEW
+            "energy_total": self.energy_delivered,  
+            "ev_served": self.ev_served,            
         }
 
-def arrivals(env, lam, lots, policy, stats, sample_duration, max_wait, cfg):
-    i = 0
-    while True:
-        ia = random.expovariate(lam)
-        yield env.timeout(ia)
-        stats.arrivals += 1
-        env.process(driver(env, i, lots, policy, stats, sample_duration, max_wait, cfg))
-
-        i += 1
 # --- Dynamic energy price by time of day ---
 # --- Smooth dynamic energy price (€/kWh) ---
 def energy_price(t_min, weekend=False,
@@ -115,6 +106,7 @@ def arrivals_nhpp(env, lots, policy, stats, sample_duration, max_wait, cfg):
     """Ogata thinning for non-homogeneous Poisson process."""
     i = 0
     t = env.now
+    stats.arrivals = 0 
     lam_max = cfg.get("lambda_max", 3.5)  # >= max lambda_of_t over day
     while True:
         # candidate interarrival ~ Exp(lam_max)

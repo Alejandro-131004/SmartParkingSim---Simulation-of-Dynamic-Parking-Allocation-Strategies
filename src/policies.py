@@ -62,3 +62,23 @@ def make_policy(name):
     if name == "balanced": return BalancedCost()
     if name == "dynpricing": return DynamicPricingBalanced()
     raise ValueError(f"Unknown policy: {name}")
+
+# inside policy.choose
+import math, random
+def choose_probabilistic(lots, now, alpha=0.1, beta=2.0):
+    utils = []
+    for L in lots:
+        load = L.res.count / max(1, L.capacity)
+        u = -(L.price + alpha*L.distance + beta*load)
+        utils.append(u)
+    # softmax
+    m = max(utils)
+    ps = [math.exp(u-m) for u in utils]
+    s = sum(ps)
+    r = random.random()*s
+    acc = 0.0
+    for L, p in zip(lots, ps):
+        acc += p
+        if r <= acc:
+            return L
+    return lots[0]

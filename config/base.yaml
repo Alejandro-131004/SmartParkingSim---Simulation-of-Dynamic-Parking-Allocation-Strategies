@@ -1,5 +1,5 @@
 seed: 42
-T: 480            
+T: 1440  # minutos (1 dia)            
 arrival_rate: 2.2 # λ por minuto (procura alta)
 duration_lognorm: {mean: 2.2, sigma: 0.7}  # minutos, lognormal
 lots:
