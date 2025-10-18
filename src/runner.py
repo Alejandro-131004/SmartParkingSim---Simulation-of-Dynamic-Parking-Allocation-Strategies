@@ -47,6 +47,10 @@ def main():
     print("Energy delivered avg (kWh):", round(statistics.mean(energy), 2))
     evs = [x.get("ev_served", 0) for x in results]
     print("EV served avg:", round(statistics.mean(evs), 1))
+    rej_ev = [x["rej_no_ev"] for x in results]
+    rej_spot = [x["rej_no_spot"] for x in results]
+    print("Rejections (no spot / no EV):", round(statistics.mean(rej_spot),1), "/", round(statistics.mean(rej_ev),1))
+
 
 
     # guardar resultados detalhados

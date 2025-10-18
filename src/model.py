@@ -32,36 +32,57 @@ class Lot:
 class Stats:
     def __init__(self):
         self.revenue = 0.0
+        self.rev_park = 0.0
+        self.rev_energy = 0.0
         self.rejected = 0
+        self.rej_no_spot = 0
+        self.rej_no_ev = 0
         self.wait = []
         self.soj = []
         self.arrivals = 0
         self.served = 0
-        self.energy_delivered = 0.0   # NEW
-        self.ev_served = 0            # NEW
+        self.energy_delivered = 0.0
+        self.ev_served = 0
+        self.ev_want = 0
+        self.ev_got = 0
         self.price_sum = {}
         self.price_n = {}
+        self.ts = []
 
     def to_dict(self, lots, T):
         occ = {L.name: L.occ_time / (T * L.capacity) for L in lots}
         avg_price = {k: (self.price_sum[k] / max(1, self.price_n[k])) for k in self.price_sum}
         rej_rate = self.rejected / max(1, self.arrivals)
         occ_global = float(np.mean(list(occ.values()))) if occ else 0.0
+
+        wait_p50 = float(np.percentile(self.wait, 50)) if self.wait else 0.0
+        wait_p95 = float(np.percentile(self.wait, 95)) if self.wait else 0.0
+
         return {
             "revenue_total": self.revenue,
+            "revenue_parking": self.rev_park,
+            "revenue_energy": self.rev_energy,
             "revenue_per_car": self.revenue / max(1, self.served),
             "rejected": self.rejected,
+            "rej_no_spot": self.rej_no_spot,
+            "rej_no_ev": self.rej_no_ev,
             "rejection_rate": rej_rate,
             "wait_avg": float(np.mean(self.wait)) if self.wait else 0.0,
+            "wait_p50": wait_p50,
+            "wait_p95": wait_p95,
             "sojourn_avg": float(np.mean(self.soj)) if self.soj else 0.0,
             "served": self.served,
             "arrivals": self.arrivals,
             "occ_lots": occ,
             "occ_global": occ_global,
             "avg_price": avg_price,
-            "energy_total": self.energy_delivered,  
-            "ev_served": self.ev_served,            
-        }
+            "energy_total": self.energy_delivered,
+            "ev_served": self.ev_served,
+            "ev_want": self.ev_want,
+            "ev_got": self.ev_got,
+            "timeline": self.ts,  # Time-series data for plots
+    }
+
 
 # --- Dynamic energy price by time of day ---
 # --- Smooth dynamic energy price (€/kWh) ---
@@ -144,6 +165,7 @@ def driver(env, i, lots, policy, stats, sample_duration, max_wait, cfg):
         waited = env.now - start
         if req not in res:
             stats.rejected += 1
+            stats.rej_no_spot += 1
             return
 
         stats.wait.append(waited)
@@ -162,6 +184,7 @@ def driver(env, i, lots, policy, stats, sample_duration, max_wait, cfg):
                     ev_res = yield evreq | env.timeout(mw)
                     if evreq not in ev_res:
                         stats.rejected += 1
+                        stats.rej_no_ev += 1
                         return
 
                     energy_needed = max(0.0, soc_target - soc_init)  # SoC difference
@@ -177,8 +200,14 @@ def driver(env, i, lots, policy, stats, sample_duration, max_wait, cfg):
                     stats.energy_delivered += energy
                     print(f"EV #{i} charged {energy:.2f} kWh at {price_now:.2f} €/kWh (hour={env.now/60:.1f})")
 
+                    stats.ev_want += 1
                     stats.ev_served += 1
-                    stats.revenue += lot.price + energy * price_now
+                    stats.ev_got += 1
+
+                    stats.rev_park += lot.price
+                    stats.rev_energy += energy * price_now
+                    stats.revenue = stats.rev_park + stats.rev_energy
+
 
                     # If parking duration exceeds charging, stay parked for the rest
                     rem = dur - actual_time
@@ -189,7 +218,9 @@ def driver(env, i, lots, policy, stats, sample_duration, max_wait, cfg):
                 # EV decided not to charge -> park as a normal vehicle
                 yield env.timeout(dur)
                 lot.occ_update(env)
-                stats.revenue += lot.price
+                stats.rev_park += lot.price
+                stats.revenue = stats.rev_park + stats.rev_energy
+
 
         else:
             # ICE vehicle
@@ -200,6 +231,20 @@ def driver(env, i, lots, policy, stats, sample_duration, max_wait, cfg):
 
         stats.soj.append(env.now - arrival)
         stats.served += 1
+
+def sampler(env, lots, stats, step=5):
+    """Sample system state every 'step' minutes for time-series analysis."""
+    while True:
+        row = {"t": env.now}
+        for L in lots:
+            occ = L.res.count / max(1, L.capacity)
+            row[f"occ_{L.name}"] = occ
+            row[f"price_{L.name}"] = L.price
+            ev_util = (L.ev_res.count / L.ev_res.capacity) if getattr(L, "ev_res", None) else 0.0
+            row[f"evutil_{L.name}"] = ev_util
+        stats.ts.append(row)
+        yield env.timeout(step)
+
 
 def run_once(cfg, policy, seed):
     random.seed(seed)
@@ -221,6 +266,7 @@ def run_once(cfg, policy, seed):
 
     env.process(arrivals_nhpp(env, lots, policy, stats, sample_duration, cfg["max_wait"], cfg))
 
+    env.process(sampler(env, lots, stats, step=5))
     env.run(until=cfg["T"])
     
     return stats.to_dict(lots, cfg["T"])
