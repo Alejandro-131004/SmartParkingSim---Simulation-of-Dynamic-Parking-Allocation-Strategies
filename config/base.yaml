@@ -5,7 +5,7 @@ duration_lognorm: {mean: 2.2, sigma: 0.7}  # minutos, lognormal
 lots:
   - {name: P1, capacity: 20, ev_spots: 5, chargers: 2, price: 2.0, distance: 2}
   - {name: P2, capacity: 15, ev_spots: 3, chargers: 1, price: 1.5, distance: 5}
-ev_share: 0.4
+ev_share: "0.4"
 power_rate: 0.3
 price_per_kWh: 0.25
 battery_init_mean: 0.4

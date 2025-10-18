@@ -7,6 +7,7 @@ os.makedirs("reports", exist_ok=True)
 
 def main():
     cfg = yaml.safe_load(open("config/base.yaml"))
+    print("ev_share type:", type(cfg.get("ev_share")), "value:", cfg.get("ev_share"))
     policy = make_policy(cfg["policy"])
     results = []
     for r in range(cfg["runs"]): 
