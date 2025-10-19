@@ -127,17 +127,41 @@ def energy_price(t_min, weekend=False,
     return max(p_min, min(p_max, p))
 
 # --- Time-varying arrival rate (arrivals per minute) ---
-def lambda_of_t(t_min):
-    """Piecewise-smooth profile: very low night, rising morning, peak late-morning, moderate afternoon."""
+# --- Determine season by day of year ---
+def season_of_day(t_min):
+    """Return season based on day of year (assuming 365 days)."""
+    day = int(t_min // 1440)
+    if   0 <= day < 79:   return "winter"
+    elif 79 <= day < 171: return "spring"
+    elif 171 <= day < 263:return "summer"
+    elif 263 <= day < 354:return "autumn"
+    else:                 return "winter"
+
+# --- Time-varying arrival rate with seasonal and event modifiers ---
+def lambda_of_t(t_min, cfg):
+    """Piecewise-smooth arrival rate, modulated by season and events."""
     h = (t_min / 60.0) % 24.0
     # base shape (0–24h)
-    if 0 <= h < 6:      base = 0.2
-    elif 6 <= h < 9:    base = 1.2 + 0.6*(h-6)   # ramp up
-    elif 9 <= h < 12:   base = 3.0               # morning peak
-    elif 12 <= h < 16:  base = 2.2
-    elif 16 <= h < 20:  base = 2.6               # evening busy
-    else:               base = 0.8
-    return base  # per minute
+    base = (0.2 if h < 6 else
+            1.2 + 0.6*(h-6) if h < 9 else
+            3.0 if h < 12 else
+            2.2 if h < 16 else
+            2.6 if h < 20 else
+            0.8)
+
+    # --- Seasonal modifier ---
+    season = season_of_day(t_min)
+    mult = cfg.get("season_multiplier", {}).get(season, 1.0)
+
+    # --- Event effects ---
+    for e in cfg.get("event_calendar", []):
+        day_start = e["day"] * 1440
+        if day_start <= t_min < day_start + 1440:
+            hour = (t_min % 1440) / 60.0
+            if e["start_hour"] <= hour < e["end_hour"]:
+                return base * mult * e.get("demand_uplift", 1.0)
+
+    return base * mult
 
 def arrivals_nhpp(env, lots, policy, stats, sample_duration, max_wait, cfg):
     """Ogata thinning for non-homogeneous Poisson process."""
@@ -154,7 +178,8 @@ def arrivals_nhpp(env, lots, policy, stats, sample_duration, max_wait, cfg):
             break
 
         # accept with prob lambda(t)/lam_max
-        if random.random() < (lambda_of_t(t) / lam_max):
+        if random.random() < (lambda_of_t(t, cfg) / lam_max):
+
             yield env.timeout(max(0.0, t - env.now))
             stats.arrivals += 1
             env.process(driver(env, i, lots, policy, stats, sample_duration, max_wait, cfg))
