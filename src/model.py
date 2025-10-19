@@ -10,18 +10,21 @@ class Lot:
     ev_spots: int = 0
     chargers: int = 0
 
+    # New attributes for extended behavior
+    type: str = "generic"
+    amenities_score: float = 0.5
+    weekend_multiplier: float = 1.0
+    price_min: float = 0.8
+    price_cap: float = 4.0
+
     def build(self, env):
-        # Regular parking spots
         self.res = simpy.Resource(env, capacity=self.capacity)
-        # EV charging spots (subset of total capacity)
         self.ev_res = simpy.Resource(env, capacity=self.ev_spots) if self.ev_spots > 0 else None
-        # Charger utilization tracking
         self.charge_time = 0.0
         self.last = env.now
         self.occ_time = 0.0
 
     def occ_update(self, env):
-        # Integrate occupied time for regular and EV spots
         dt = env.now - self.last
         if dt > 0:
             self.occ_time += dt * self.res.count
@@ -51,6 +54,10 @@ class Stats:
         self.price_sum = {}
         self.price_n = {}
         self.ts = []
+        self.profit = 0.0
+        self.energy_cost = 0.0
+        self.maintenance_cost = 0.0
+
 
     def to_dict(self, lots, T):
         occ = {L.name: L.occ_time / (T * L.capacity) for L in lots}
@@ -138,12 +145,14 @@ def arrivals_nhpp(env, lots, policy, stats, sample_duration, max_wait, cfg):
     t = env.now
     stats.arrivals = 0 
     lam_max = cfg.get("lambda_max", 3.5)  # >= max lambda_of_t over day
+    T = cfg.get("T", cfg.get("T_days", 1) * 1440)
     while True:
         # candidate interarrival ~ Exp(lam_max)
         ia = random.expovariate(lam_max)
         t += ia
-        if t > cfg["T"]:
+        if t > T:
             break
+
         # accept with prob lambda(t)/lam_max
         if random.random() < (lambda_of_t(t) / lam_max):
             yield env.timeout(max(0.0, t - env.now))
@@ -257,28 +266,48 @@ def driver(env, i, lots, policy, stats, sample_duration, max_wait, cfg):
                             return
 
                     # --- Charging phase ---
-                    energy_needed = max(0.0, soc_target - soc_init)
-                    power_rate = float(cfg.get("power_rate", 0.3))
-                    charge_time = energy_needed / max(power_rate, 1e-9)
-                    actual_time = min(dur, charge_time)
-                    yield env.timeout(actual_time)
-                    lot.occ_update(env)
+                    battery_capacity = cfg.get("battery_capacity_kWh", 50.0)
+                    energy_needed = (soc_target - soc_init) * battery_capacity  # kWh
+                    power_rate = float(cfg.get("power_rate_kW", 7.0))           # kW
+                    charge_time = (energy_needed / max(power_rate, 1e-9)) * 60.0  # minutes
 
-                    price_now = energy_price(env.now)
-                    energy = actual_time * power_rate
-                    stats.energy_delivered += energy
+                    # define actual_time BEFORE using it
+                    actual_time = min(dur, charge_time)
+
+                    # Bill energy hour-by-hour with variable price
+                    remaining_time = actual_time
+                    energy_delivered = 0.0
+
+                    while remaining_time > 0:
+                        step = min(60, remaining_time)            # minutes
+                        price_now = energy_price(env.now)         # €/kWh
+                        energy_step = (step / 60.0) * power_rate  # kWh
+                        stats.rev_energy += energy_step * price_now
+                        energy_delivered += energy_step
+                        yield env.timeout(step)
+                        remaining_time -= step
+
+                    lot.occ_update(env)
+                    stats.energy_delivered += energy_delivered
                     stats.ev_served += 1
                     stats.ev_got += 1
                     stats.rev_park += lot.price
-                    stats.rev_energy += energy * price_now
                     stats.revenue = stats.rev_park + stats.rev_energy
-
-                    print(f"EV #{i} charged {energy:.2f} kWh at {price_now:.2f} €/kWh (hour={env.now/60:.1f})")
 
                     rem = dur - actual_time
                     if rem > 0:
                         yield env.timeout(rem)
                         lot.occ_update(env)
+                    stats.energy_delivered += energy_delivered
+                    stats.ev_served += 1
+                    stats.ev_got += 1
+                    stats.rev_park += lot.price
+                    stats.revenue = stats.rev_park + stats.rev_energy
+
+
+                    #print(f"EV #{i} charged {energy:.2f} kWh at {price_now:.2f} €/kWh (hour={env.now/60:.1f})")
+
+                    
             else:
                 yield env.timeout(dur)
                 lot.occ_update(env)
@@ -292,7 +321,7 @@ def driver(env, i, lots, policy, stats, sample_duration, max_wait, cfg):
 
         stats.soj.append(env.now - arrival)
         stats.served += 1
-
+        
 
 
 def sampler(env, lots, stats, step=5):
@@ -315,6 +344,16 @@ def run_once(cfg, policy, seed):
     env = simpy.Environment()
     stats = Stats()
 
+    # --- Load global elasticities and seasonal factors ---
+    elastic = cfg.get("elasticity", {})
+    season_mult = cfg.get("season_multiplier", {})
+    season = cfg.get("season", "summer")
+
+    print(f"[INFO] Season: {season}  |  Seasonal multiplier: {season_mult.get(season, 1.0)}")
+    print(f"[INFO] Elasticities: {elastic}")
+
+    # --- Initialize parking lots ---
+    
     lots = [Lot(**d) for d in cfg["lots"]]
     for L in lots:
         L.build(env)
@@ -330,6 +369,9 @@ def run_once(cfg, policy, seed):
     env.process(arrivals_nhpp(env, lots, policy, stats, sample_duration, cfg["max_wait"], cfg))
 
     env.process(sampler(env, lots, stats, step=5))
-    env.run(until=cfg["T"])
+    T = cfg.get("T", cfg.get("T_days", 1) * 1440)
+    env.run(until=T)
+
     
-    return stats.to_dict(lots, cfg["T"])
+    return stats.to_dict(lots, T)
+

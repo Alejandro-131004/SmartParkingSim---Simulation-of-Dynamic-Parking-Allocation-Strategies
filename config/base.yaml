@@ -1,17 +1,71 @@
 seed: 42
-T: 1440  # minutos (1 dia)            
-arrival_rate: 2.2 # λ por minuto (procura alta)
-duration_lognorm: {mean: 2.2, sigma: 0.7}  # minutos, lognormal
+
+arrival_rate: 2.2
+duration_lognorm: {mean: 2.2, sigma: 0.7}
 lambda_max: 5.0
-lots:
-  - {name: P1, capacity: 4, ev_spots: 2, price: 2.0, distance: 1}
-  - {name: P2, capacity: 3, ev_spots: 1, price: 1.5, distance: 4}
+
+# === EV behavior ===
 ev_share: 0.5
 power_rate: 0.3
 price_per_kWh: 0.25
 battery_init_mean: 0.4
 battery_target: 0.8
+battery_capacity_kWh: 50
+power_rate_kW: 7
 
+
+# === Dynamic pricing policy ===
 policy: dynpricing
-max_wait: 1    
-runs: 20      
+max_wait: 1
+runs: 1 #change to see more simulations
+
+# === Elasticities (behavioral sensitivity) ===
+elasticity:
+  price: 1.2
+  distance: 0.25
+  occupancy: 1.5
+  amenity: 0.6
+  energy_price: 0.8
+
+# === Season and weekend modifiers ===
+T_days: 365
+season: winter
+
+season_multiplier:
+  winter: 1.10     
+  spring: 1.00     
+  summer: 0.95     
+  autumn: 1.05     
+
+# === Event calendar (optional, used later) ===
+event_calendar:
+  - day: 3
+    lot: P2
+    start_hour: 18
+    end_hour: 23
+    demand_uplift: 2.0
+    price_multiplier: 1.3
+
+# === Parking lots (with new attributes) ===
+lots:
+  - name: P1
+    type: commuter
+    capacity: 4
+    ev_spots: 2
+    price: 2.0
+    distance: 1
+    amenities_score: 0.8
+    weekend_multiplier: 0.6
+    price_min: 1.0
+    price_cap: 5.0
+
+  - name: P2
+    type: retail
+    capacity: 3
+    ev_spots: 1
+    price: 1.5
+    distance: 4
+    amenities_score: 0.5
+    weekend_multiplier: 1.2
+    price_min: 0.8
+    price_cap: 4.0
