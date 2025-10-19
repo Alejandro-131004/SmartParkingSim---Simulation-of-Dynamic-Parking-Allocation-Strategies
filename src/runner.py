@@ -50,6 +50,11 @@ def main():
     rej_ev = [x["rej_no_ev"] for x in results]
     rej_spot = [x["rej_no_spot"] for x in results]
     print("Rejections (no spot / no EV):", round(statistics.mean(rej_spot),1), "/", round(statistics.mean(rej_ev),1))
+    redir = [x.get("redirected", 0) for x in results]
+    redir_ok = [x.get("redirect_success", 0) for x in results]
+    print("Redirections avg:", round(statistics.mean(redir), 1))
+    print("Successful redirections avg:", round(statistics.mean(redir_ok), 1))
+
 
 
 

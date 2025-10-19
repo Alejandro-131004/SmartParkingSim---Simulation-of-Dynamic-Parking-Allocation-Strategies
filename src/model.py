@@ -35,6 +35,9 @@ class Stats:
         self.rev_park = 0.0
         self.rev_energy = 0.0
         self.rejected = 0
+        self.redirected = 0
+        self.redirect_success = 0
+        self.redirect_fail = 0
         self.rej_no_spot = 0
         self.rej_no_ev = 0
         self.wait = []
@@ -57,6 +60,7 @@ class Stats:
 
         wait_p50 = float(np.percentile(self.wait, 50)) if self.wait else 0.0
         wait_p95 = float(np.percentile(self.wait, 95)) if self.wait else 0.0
+        redir_rate = self.redirect_success / max(1, self.redirected)
 
         return {
             "revenue_total": self.revenue,
@@ -81,6 +85,11 @@ class Stats:
             "ev_want": self.ev_want,
             "ev_got": self.ev_got,
             "timeline": self.ts,  # Time-series data for plots
+            "redirected": self.redirected,
+            "redirect_success": self.redirect_success,
+            "redirect_fail": self.redirect_fail,
+            "redirect_success_rate": redir_rate,
+
     }
 
 
@@ -145,92 +154,146 @@ def arrivals_nhpp(env, lots, policy, stats, sample_duration, max_wait, cfg):
             # rejected candidate, skip to next loop iteration
             pass
 
+def find_closest_available(lots, current_lot, max_distance=2.0):
+    """Return closest alternative lot with available spots, or None if none within threshold."""
+    available = [L for L in lots if L.res.count < L.capacity and L.name != current_lot.name]
+    if not available:
+        return None
+    closest = min(available, key=lambda L: L.distance)
+    if abs(closest.distance - current_lot.distance) <= max_distance:
+        return closest
+    return None
 
 def driver(env, i, lots, policy, stats, sample_duration, max_wait, cfg):
+    """One driver process: chooses lot, may redirect, may charge if EV."""
     arrival = env.now
     is_ev = random.random() < float(cfg.get("ev_share", 0))
 
-
-
+    # --- Driver chooses an initial lot (may be full) ---
     lot = policy.choose(lots, now=env.now)
+
+    # --- Case 1: No lot selected at all ---
     if lot is None:
         stats.rejected += 1
-        return
+        stats.rej_no_spot += 1
+        alt = find_closest_available(lots, None, max_distance=3.0)
+        if alt:
+            stats.redirected += 1
+            yield env.timeout(abs(alt.distance) * 2.0)  # travel time
+            stats.redirect_success += 1
+            lot = alt
+        else:
+            stats.redirect_fail += 1
+            return
 
+    # --- Try to park in chosen lot ---
     lot.occ_update(env)
     with lot.res.request() as req:
         start = env.now
         mw = policy.max_wait() if hasattr(policy, "max_wait") else max_wait
         res = yield req | env.timeout(mw)
         waited = env.now - start
-        if req not in res:
-            stats.rejected += 1
-            stats.rej_no_spot += 1
-            return
 
+        # --- Case 2: Spot unavailable, attempt redirect ---
+        if req not in res:
+            alt = find_closest_available(lots, lot, max_distance=3.0)
+            if alt:
+                stats.redirected += 1
+                delay = abs(alt.distance - lot.distance) * 2.0
+                yield env.timeout(delay)
+                p_accept = max(0.0, 1.0 - 0.1 * abs(alt.distance - lot.distance))
+                if random.random() < p_accept:
+                    stats.redirect_success += 1
+                    lot = alt
+                    lot.occ_update(env)
+                    # retry parking once
+                    with lot.res.request() as req2:
+                        res2 = yield req2 | env.timeout(mw)
+                        if req2 not in res2:
+                            stats.rejected += 1
+                            stats.rej_no_spot += 1
+                            stats.redirect_fail += 1
+                            return
+                else:
+                    stats.redirect_fail += 1
+                    stats.rejected += 1
+                    stats.rej_no_spot += 1
+                    return
+            else:
+                stats.rejected += 1
+                stats.rej_no_spot += 1
+                return
+
+        # --- Normal parking process ---
         stats.wait.append(waited)
         dur = float(sample_duration())
 
         if is_ev and getattr(lot, "ev_res", None) is not None:
-            # --- Decide if EV actually wants to charge ---
             soc_init = float(np.clip(np.random.normal(cfg.get("battery_init_mean", 0.4), 0.05), 0.0, 0.99))
             soc_target = float(np.clip(cfg.get("battery_target", 0.8), 0.0, 1.0))
-            # 70% of EVs want to charge, or always if SoC < 30%
             want_charge = (random.random() < 0.7) or (soc_init < 0.3)
 
             if want_charge:
-                # Request EV spot and charger
+                stats.ev_want += 1
                 with lot.ev_res.request() as evreq:
                     ev_res = yield evreq | env.timeout(mw)
                     if evreq not in ev_res:
-                        stats.rejected += 1
-                        stats.rej_no_ev += 1
-                        return
+                        # --- Try redirect if no EV spot available ---
+                        alt = find_closest_available(lots, lot, max_distance=3.0)
+                        if alt and getattr(alt, "ev_res", None):
+                            stats.redirected += 1
+                            yield env.timeout(abs(alt.distance - lot.distance) * 2.0)
+                            stats.redirect_success += 1
+                            lot = alt
+                            with lot.ev_res.request() as evreq2:
+                                ev_res2 = yield evreq2 | env.timeout(mw)
+                                if evreq2 not in ev_res2:
+                                    stats.rejected += 1
+                                    stats.rej_no_ev += 1
+                                    return
+                        else:
+                            stats.rejected += 1
+                            stats.rej_no_ev += 1
+                            return
 
-                    energy_needed = max(0.0, soc_target - soc_init)  # SoC difference
-                    power_rate = float(cfg.get("power_rate", 0.3))   # kWh/min
+                    # --- Charging phase ---
+                    energy_needed = max(0.0, soc_target - soc_init)
+                    power_rate = float(cfg.get("power_rate", 0.3))
                     charge_time = energy_needed / max(power_rate, 1e-9)
                     actual_time = min(dur, charge_time)
                     yield env.timeout(actual_time)
                     lot.occ_update(env)
 
-                    # Compute dynamic price
                     price_now = energy_price(env.now)
                     energy = actual_time * power_rate
                     stats.energy_delivered += energy
-                    print(f"EV #{i} charged {energy:.2f} kWh at {price_now:.2f} €/kWh (hour={env.now/60:.1f})")
-
-                    stats.ev_want += 1
                     stats.ev_served += 1
                     stats.ev_got += 1
-
                     stats.rev_park += lot.price
                     stats.rev_energy += energy * price_now
                     stats.revenue = stats.rev_park + stats.rev_energy
 
+                    print(f"EV #{i} charged {energy:.2f} kWh at {price_now:.2f} €/kWh (hour={env.now/60:.1f})")
 
-                    # If parking duration exceeds charging, stay parked for the rest
                     rem = dur - actual_time
                     if rem > 0:
                         yield env.timeout(rem)
                         lot.occ_update(env)
             else:
-                # EV decided not to charge -> park as a normal vehicle
                 yield env.timeout(dur)
                 lot.occ_update(env)
                 stats.rev_park += lot.price
                 stats.revenue = stats.rev_park + stats.rev_energy
-
-
         else:
-            # ICE vehicle
             yield env.timeout(dur)
             lot.occ_update(env)
-            stats.revenue += lot.price
-
+            stats.rev_park += lot.price
+            stats.revenue = stats.rev_park + stats.rev_energy
 
         stats.soj.append(env.now - arrival)
         stats.served += 1
+
+
 
 def sampler(env, lots, stats, step=5):
     """Sample system state every 'step' minutes for time-series analysis."""

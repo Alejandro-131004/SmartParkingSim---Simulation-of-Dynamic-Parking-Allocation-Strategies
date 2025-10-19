@@ -2,10 +2,11 @@ seed: 42
 T: 1440  # minutos (1 dia)            
 arrival_rate: 2.2 # λ por minuto (procura alta)
 duration_lognorm: {mean: 2.2, sigma: 0.7}  # minutos, lognormal
+lambda_max: 5.0
 lots:
-  - {name: P1, capacity: 20, ev_spots: 5, chargers: 2, price: 2.0, distance: 2}
-  - {name: P2, capacity: 15, ev_spots: 3, chargers: 1, price: 1.5, distance: 5}
-ev_share: "0.4"
+  - {name: P1, capacity: 4, ev_spots: 2, price: 2.0, distance: 1}
+  - {name: P2, capacity: 3, ev_spots: 1, price: 1.5, distance: 4}
+ev_share: 0.5
 power_rate: 0.3
 price_per_kWh: 0.25
 battery_init_mean: 0.4

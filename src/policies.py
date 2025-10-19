@@ -1,84 +1,87 @@
+import math, random
 
+# ---------- Base helpers ----------
+def load(L):
+    """Instantaneous utilization ratio of lot."""
+    return L.res.count / max(1, L.capacity)
 
+# ---------- FCFS ----------
 class FCFS:
     def choose(self, lots, now):
-        # Choose the cheapest lot; tie-breaking by shortest distance
+        # choose by price, then distance — IGNORE capacity here
         return sorted(lots, key=lambda L: (L.price, L.distance))[0] if lots else None
+
     def max_wait(self): return 10
     def pay(self, lot, payment): return lot.price
 
-
-def load(L):
-    # Instantaneous utilization: in-service over capacity
-    return L.res.count / max(1, L.capacity)
-
-
+# ---------- BalancedCost ----------
 class BalancedCost:
     def __init__(self, alpha=0.1, beta=2.5, max_wait_min=10):
         self.alpha, self.beta, self._mw = alpha, beta, max_wait_min
+
     def max_wait(self): return self._mw
+
     def choose(self, lots, now):
-        # Cost = price + alpha*distance + beta*load
-        def cost(L): return L.price + self.alpha * L.distance + self.beta * load(L)
-        return min(lots, key=cost) if lots else None
+        if not lots: return None
+        def load(L): return L.res.count / max(1, L.capacity)
+        def cost(L): return L.price + self.alpha*L.distance + self.beta*load(L)
+        return min(lots, key=cost)
+
     def pay(self, lot, payment): return lot.price
 
-
+# ---------- DynamicPricingBalanced ----------
 class DynamicPricingBalanced:
     def __init__(self, alpha=0.1, beta=2.5, target=0.8, k=1,
                  p_min=1.5, p_max=4.0, interval=2, max_wait_min=10):
-        # alpha: distance weight | beta: load weight
-        # target: target occupancy | k: proportional controller gain
         self.alpha, self.beta = alpha, beta
         self.target, self.k = target, k
         self.p_min, self.p_max = p_min, p_max
-        self.interval = interval          # minutes between price updates
+        self.interval = interval
         self._mw = max_wait_min
+
     def max_wait(self): return self._mw
+
     def _occ(self, L): return L.res.count / max(1, L.capacity)
+
     def choose(self, lots, now):
-        # Choose by generalized cost with current (dynamic) price
-        def cost(L): return L.price + self.alpha * L.distance + self.beta * self._occ(L)
-        return min(lots, key=cost) if lots else None
+        if not lots: return None
+        def occ(L): return L.res.count / max(1, L.capacity)
+        def cost(L): return L.price + self.alpha*L.distance + self.beta*occ(L)
+        return min(lots, key=cost)
+
     def pay(self, lot, payment): return lot.price
 
     def schedule(self, env, lots, stats):
-        # Periodically adjust price toward target occupancy and log prices
         while True:
             for L in lots:
                 occ = self._occ(L)
                 new_p = L.price + self.k * (occ - self.target)
                 L.price = max(self.p_min, min(self.p_max, new_p))
-                # Log price
                 stats.price_sum[L.name] += L.price
                 stats.price_n[L.name] += 1
             yield env.timeout(self.interval)
 
+# ---------- Probabilistic selector ----------
+def choose_probabilistic(lots, alpha=0.1, beta=2.0):
+    """Softmax-based probabilistic selection between available lots."""
+    avail = [L for L in lots if L.res.count < L.capacity]
+    if not avail:
+        return None
+    utils = [-(L.price + alpha * L.distance + beta * load(L)) for L in avail]
+    m = max(utils)
+    ps = [math.exp(u - m) for u in utils]
+    s = sum(ps)
+    r = random.random() * s
+    acc = 0.0
+    for L, p in zip(avail, ps):
+        acc += p
+        if r <= acc:
+            return L
+    return avail[0]
 
-
+# ---------- Factory ----------
 def make_policy(name):
-    # Single source of truth
     if name == "fcfs": return FCFS()
     if name == "balanced": return BalancedCost()
     if name == "dynpricing": return DynamicPricingBalanced()
     raise ValueError(f"Unknown policy: {name}")
-
-# inside policy.choose
-import math, random
-def choose_probabilistic(lots, now, alpha=0.1, beta=2.0):
-    utils = []
-    for L in lots:
-        load = L.res.count / max(1, L.capacity)
-        u = -(L.price + alpha*L.distance + beta*load)
-        utils.append(u)
-    # softmax
-    m = max(utils)
-    ps = [math.exp(u-m) for u in utils]
-    s = sum(ps)
-    r = random.random()*s
-    acc = 0.0
-    for L, p in zip(lots, ps):
-        acc += p
-        if r <= acc:
-            return L
-    return lots[0]
