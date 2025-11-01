@@ -1,8 +1,8 @@
 seed: 42
 
-arrival_rate: 2.2
-duration_lognorm: {mean: 2.2, sigma: 0.7}
-lambda_max: 5.0
+# === Data-driven arrivals ===
+arrival_mode: dataset
+dataset_path: "dataset_fluxos_hourly_2022.csv"
 
 # === EV behavior ===
 ev_share: 0.5
@@ -26,16 +26,7 @@ elasticity:
   occupancy: 1.5
   amenity: 0.6
   energy_price: 0.8
-
-# === Season and weekend modifiers ===
-T_days: 365
-season: winter
-
-season_multiplier:
-  winter: 1.10     
-  spring: 1.00     
-  summer: 0.95     
-  autumn: 1.05     
+  traffic: 0.3  
 
 # === Event calendar (optional, used later) ===
 event_calendar:
@@ -46,26 +37,44 @@ event_calendar:
     demand_uplift: 2.0
     price_multiplier: 1.3
 
-# === Parking lots (with new attributes) ===
+
+
 lots:
-  - name: P1
+  - name: P001
     type: commuter
-    capacity: 4
-    ev_spots: 2
+    capacity: 1145
+    ev_spots: 20
     price: 2.0
     distance: 1
     amenities_score: 0.8
     weekend_multiplier: 0.6
     price_min: 1.0
     price_cap: 5.0
+    
 
-  - name: P2
+  - name: P002
     type: retail
-    capacity: 3
-    ev_spots: 1
+    capacity: 400
+    ev_spots: 10
     price: 1.5
     distance: 4
     amenities_score: 0.5
     weekend_multiplier: 1.2
     price_min: 0.8
     price_cap: 4.0
+
+  - name: P004
+    type: retail
+    capacity: 400
+    ev_spots: 10
+    price: 1.5
+    distance: 4
+    amenities_score: 0.5
+    weekend_multiplier: 1.2
+    price_min: 0.8
+    price_cap: 4.0
+      
+      
+debug: true
+debug_sample_hours: 6   
+
