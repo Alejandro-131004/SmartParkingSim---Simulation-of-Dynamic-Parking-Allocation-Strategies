@@ -532,14 +532,7 @@ def run_once(cfg, policy, seed):
         sample_duration = _make_sample_duration(cfg)
         arrivals_from_hourly_dataset(env, lots, policy, stats, cfg, sample_duration)
         T = _compute_horizon_minutes(cfg.get("dataset_path", "dataset_fluxos_hourly_2022.csv"), cfg)
-    else:
-        # Synthetic mode (kept for testing)
-        dl = cfg.get("duration_lognorm") or {}
-        m = float(dl.get("mean", 2.2))
-        s = float(dl.get("sigma", 0.7))
-        sample_duration = lambda: float(np.random.lognormal(m, s))
-        env.process(arrivals_nhpp(env, lots, policy, stats, sample_duration, cfg.get("max_wait", 1), cfg))
-        T = int(cfg.get("T", 1440))  # fallback: 1 day
+
 
     # --- Sampler ---
     env.process(sampler(env, lots, stats, step=5))

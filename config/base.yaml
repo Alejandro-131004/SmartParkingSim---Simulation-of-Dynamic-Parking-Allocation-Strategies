@@ -76,5 +76,5 @@ lots:
       
       
 debug: true
-debug_sample_hours: 6   
+debug_sample_hours: 24
 
