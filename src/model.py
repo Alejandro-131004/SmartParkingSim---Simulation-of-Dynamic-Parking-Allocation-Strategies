@@ -364,98 +364,80 @@ def arrivals_from_hourly_dataset(env, lots, policy, stats, cfg, sample_duration)
 
 
 def arrivals_for_lot(env, lot, df_lot, policy, stats, cfg, sample_duration):
-    """Simulate arrivals for a single parking lot from its hourly 'entries' series."""
-    debug_hours = int(cfg.get("debug_sample_hours", 0))
-
-    elasticity = cfg.get("elasticity", {})
-    alpha_price   = float(elasticity.get("price",   1.0))
-    alpha_traffic = float(elasticity.get("traffic", 0.0))   # <- usar chave 'traffic' no YAML se quiseres
-    alpha_temp    = 0.02  # sensibilidade térmica simples
-
-    base_price = float(lot.price)
-    max_wait   = cfg.get("max_wait", 1)
-
-    # Helper para converter (date, hour) numa "hora absoluta" crescente por linha
-    # Assim conseguimos detetar hiatos (horas faltantes no CSV)
-    df_lot = df_lot.copy()
+    """
+    Simulate arrivals and departures for one parking lot based on hourly dataset.
+    Uses both 'entries' and 'exits' columns.
+    """
+    df_lot = df_lot.sort_values(["date", "hour"]).copy()
     df_lot["date"] = pd.to_datetime(df_lot["date"])
     df_lot["abs_hour"] = (df_lot["date"] - df_lot["date"].min()).dt.days * 24 + df_lot["hour"].astype(int)
 
+    max_wait = cfg.get("max_wait", 1)
+    elasticity = cfg.get("elasticity", {})
+    alpha_price = float(elasticity.get("price", 1.0))
+    alpha_traffic = float(elasticity.get("traffic", 0.0))
+    alpha_temp = 0.02
+
+    base_price = float(lot.price)
     last_abs_hour = None
+
     for _, row in df_lot.iterrows():
         abs_hour = int(row["abs_hour"])
-        entries  = int(row["entries"])
-        traffic  = float(row.get("traffic_score", 1.0))
-
-        # Temperatura média se existir
+        n_in = int(row.get("entries", 0))
+        n_out = int(row.get("exits", 0))
+        traffic = float(row.get("traffic_score", 1.0))
         temp_min = row.get("temp_min_c", None)
         temp_max = row.get("temp_max_c", None)
-        if pd.notna(temp_min) and pd.notna(temp_max):
-            temp_mean = (float(temp_min) + float(temp_max)) / 2.0
-        else:
-            temp_mean = 22.0  # neutro
+        temp_mean = ((float(temp_min) + float(temp_max)) / 2.0) if pd.notna(temp_min) and pd.notna(temp_max) else 22.0
 
-        # Se há salto de horas no CSV, avançar o tempo
-        if last_abs_hour is None:
-            # Primeiro registo do lote: garantir que estamos alinhados ao início
-            # (se quiseres alinhar tudo a t=0 neste primeiro registo, não faças timeout aqui)
-            pass
-        else:
+        # Avança no tempo se houver hiatos
+        if last_abs_hour is not None:
             gap_hours = abs_hour - last_abs_hour - 1
             if gap_hours > 0:
-                yield env.timeout(gap_hours * 60)  # minutos
-
+                yield env.timeout(gap_hours * 60)
         last_abs_hour = abs_hour
 
-        # Ajuste de intenção por contexto (preço, tráfego, temperatura)
-        # Preço: normalizar pela diferença face a base_price (evita divisão por 0)
+        # Fatores contextuais (afetam só as entradas)
         if base_price > 0:
             price_factor = max(0.2, 1 - alpha_price * (lot.price - base_price) / base_price)
         else:
             price_factor = 1.0
-
-        # Tráfego (score ~ 0..10): quanto maior o score, maior congestão → ligeira redução
         traffic_factor = max(0.2, 1 - alpha_traffic * (traffic / 10.0))
-
-        # Conforto térmico em torno de 22 ºC
         temp_factor = max(0.4, 1 - alpha_temp * abs(temp_mean - 22.0))
 
-        adj_entries = int(round(entries * price_factor * traffic_factor * temp_factor))
-
-                # track totals
+        adj_entries = int(round(n_in * price_factor * traffic_factor * temp_factor))
         stats.arrivals_expected_by_lot[lot.name] += adj_entries
 
-        if debug_hours > 0 and (last_abs_hour is None or abs_hour < df_lot["abs_hour"].min() + debug_hours):
-            _dbg(cfg, 
-                 f"[HOUR] lot={lot.name} abs_hour={abs_hour} "
-                 f"entries={entries} adj={adj_entries} "
-                 f"factors: price={price_factor:.2f}, traffic={traffic_factor:.2f}, temp={temp_factor:.2f} "
-                 f"price_now={lot.price:.2f}")
+        _dbg(cfg, f"[HOUR] lot={lot.name} hour={abs_hour} in={n_in}→{adj_entries} out={n_out} "
+                  f"factors: price={price_factor:.2f}, traffic={traffic_factor:.2f}, temp={temp_factor:.2f}")
 
-        if adj_entries <= 0:
-            # Mesmo sem chegadas, avançar 1 hora
-            yield env.timeout(60)
-            continue
+        # --- Process incoming cars uniformly over the hour ---
+        if adj_entries > 0:
+            interval_in = 60.0 / adj_entries
+            for i in range(adj_entries):
+                stats.arrivals += 1
+                stats.arrivals_spawned_by_lot[lot.name] = stats.arrivals_spawned_by_lot.get(lot.name, 0) + 1
+                env.process(driver(
+                    env,
+                    f"{lot.name}_{abs_hour}_{i}",
+                    [lot],
+                    policy,
+                    stats,
+                    sample_duration=sample_duration,
+                    max_wait=max_wait,
+                    cfg=cfg
+                ))
+                yield env.timeout(interval_in)
 
-        # Espalhar as chegadas uniformemente ao longo da hora
-        interval = 60.0 / adj_entries  # minutos por chegada
-        for i in range(adj_entries):
-            stats.arrivals += 1
-            stats.arrivals_spawned_by_lot[lot.name] = stats.arrivals_spawned_by_lot.get(lot.name, 0) + 1
-            env.process(driver(
-                env,
-                f"{lot.name}_{abs_hour}_{i}",
-                [lot],
-                policy,
-                stats,
-                sample_duration=sample_duration,
-                max_wait=max_wait,
-                cfg=cfg
-            ))
+        # --- Process departures (free spots) uniformly over the same hour ---
+        if n_out > 0:
+            interval_out = 60.0 / n_out
+            for _ in range(n_out):
+                # Remove one car if there is anyone parked
+                if lot.res.count > 0 and lot.res.users:
+                    lot.res.release(lot.res.users[0])
+                yield env.timeout(interval_out)
 
-            yield env.timeout(interval)
-
-        # Ao final dos adj_entries, já somou ~60 minutos (interval * adj_entries ≈ 60)
 
 def _make_sample_duration(cfg):
     """Return a callable duration sampler. Uses YAML if present; otherwise a safe default."""
