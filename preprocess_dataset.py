@@ -51,7 +51,7 @@ def preprocess_parking_data_xlsx(
         flux_multiplier=1.10, entry_exit_ratio=0.30, min_flux_ratio=0.10, nthreads=8):
 
     print("\n" + "="*70)
-    print("🚗 PRE-PROCESSAMENTO INTEGRADO COM SCORE DE TRÁFEGO")
+    print(" PRE-PROCESSAMENTO INTEGRADO COM SCORE DE TRÁFEGO")
     print("="*70)
     print(f"\n📂 Carregando estacionamento...")
     df = pd.read_excel(input_file, sheet_name=0)
