@@ -1,8 +1,8 @@
 import pandas as pd
 
 # === Load datasets ===
-df_fluxos = pd.read_csv("dataset_fluxos_hourly_2022.csv", low_memory=False)
-df_temp = pd.read_csv("temp_min_max_station1.csv")
+df_fluxos = pd.read_csv("data/dataset_fluxos_hourly_2022.csv", low_memory=False)
+df_temp = pd.read_csv("data/temp_min_max_station1.csv")
 
 # === Prepare date columns ===
 df_fluxos["data"] = pd.to_datetime(df_fluxos["data"]).dt.date

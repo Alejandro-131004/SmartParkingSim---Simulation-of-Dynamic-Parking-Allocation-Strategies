@@ -131,9 +131,9 @@ def preprocess_parking_data_xlsx(
 
 if __name__ == "__main__":
     preprocess_parking_data_xlsx(
-        input_file='parques-estacionamento-1s-2022.xlsx',
+        input_file='data/parques-estacionamento-1s-2022.xlsx',
         output_file='dataset_fluxos_hourly_2022.csv',
-        traffic_score_file='traffic_score_by_hour.csv',
+        traffic_score_file='data/traffic_score_by_hour.csv',
         flux_multiplier=1.10,
         entry_exit_ratio=0.30,
         min_flux_ratio=0.10,

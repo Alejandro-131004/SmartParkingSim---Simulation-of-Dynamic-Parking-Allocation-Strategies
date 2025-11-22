@@ -1,6 +1,6 @@
 import pandas as pd
 
-traffic_file = "trafegoall.csv"
+traffic_file = "data/trafegoall.csv"
 output_file = "traffic_score_by_hour.csv"
 
 df = pd.read_csv(traffic_file, low_memory=False)

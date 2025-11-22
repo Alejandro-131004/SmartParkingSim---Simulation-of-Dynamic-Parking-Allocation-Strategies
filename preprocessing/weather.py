@@ -1,6 +1,6 @@
 import pandas as pd
 
-input_temp_file = "ME_2022_S1.csv"
+input_temp_file = "data/ME_2022_S1.csv"
 output_daily_file = "temp_min_max_station1.csv"
 
 df = pd.read_csv(input_temp_file, low_memory=False)

@@ -1,0 +1,9 @@
+parking_lot: P023
+capacity: 180
+lat: 38.744081
+lon: -9.132344
+days_total: 178
+days_missing: 6
+imputation:
+  low_missing: ffill+bfill (integer)
+  high_missing: hourly mean (integer-rounded)
