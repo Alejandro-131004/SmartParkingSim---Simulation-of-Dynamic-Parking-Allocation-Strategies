@@ -6,7 +6,7 @@ import os
 # CONFIG
 # ============================================================
 
-DATA_PATH = "data/dataset_fluxos_hourly_2022.csv"
+DATA_PATH = "data/dataset_fluxos_hourly_2022_updated.csv"
 OUTPUT_FOLDER = "data/missing_traffic"
 
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
