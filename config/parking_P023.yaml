@@ -8,51 +8,55 @@ seed: 42
 arrival_mode: dataset
 dataset_path:  "dataset_P023_simready_updated.csv"
 
-# === Digital Twin Options ===
-twin_horizon: 3          # hours to forecast
-twin_runs: 3             # number of future simulation runs
+# ====== DIGITAL TWIN OFFLINE (Forecast + Simulation) ======
 
-# === EV behavior (required even if EV spots = 0) ===
+twin_train_start: "2022-01-01"
+twin_train_end:   "2022-05-31"
+
+twin_test_start:  "2022-06-01"
+twin_test_end:    "2022-06-30"
+
+# Capacidade / EV config continua válida para SimPy
 ev_share: 0.5
-power_rate: 0.3
-price_per_kWh: 0.25
+power_rate_kW: 7
 battery_init_mean: 0.4
 battery_target: 0.8
 battery_capacity_kWh: 50
-power_rate_kW: 7
+price_per_kWh: 0.25
 
-# === Simulation Policy ===
-policy: dynpricing        # dynamic pricing / balanced / fcfs
+# ==========================
+# SIMPY SIMULATION CONFIG
+# ==========================
+
+policy: dynpricing
+
 max_wait: 1
-runs: 1                   # number of Monte Carlo simulations
+runs: 1
 
-# === Elasticities (behavior-sensitive) ===
 elasticity:
   price: 1.2
   distance: 0.25
   occupancy: 1.5
+  amenity: 0.6
+  energy_price: 0.8
   traffic: 0.3
 
-# === Event calendar (optional) ===
 event_calendar: []
 
-###############################################################
-#                  Only ONE parking lot here
-###############################################################
+# ==========================
+# PARKING LOT CONFIG
+# ==========================
 
 lots:
   - name: P023
     type: commuter
     capacity: 180
-    ev_spots: 0
-    price: 2.0
+    ev_spots: 10
+    price: 1.5
     distance: 1
     amenities_score: 0.8
     weekend_multiplier: 1.0
     price_min: 1.0
-    price_cap: 4.0
-
-###############################################################
+    price_cap: 3.0
 
 debug: false
-debug_sample_hours: 24
