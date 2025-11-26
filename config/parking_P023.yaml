@@ -1,9 +1,58 @@
-parking_lot: P023
-capacity: 180
-lat: 38.744081
-lon: -9.132344
-days_total: 178
-days_missing: 6
-imputation:
-  low_missing: ffill+bfill (integer)
-  high_missing: hourly mean (integer-rounded)
+###############################################################
+#   Parking P023 – Standalone Simulation / Digital Twin YAML
+###############################################################
+
+seed: 42
+
+# === Data-driven arrivals ===
+arrival_mode: dataset
+dataset_path:  "dataset_P023_simready_updated.csv"
+
+# === Digital Twin Options ===
+twin_horizon: 3          # hours to forecast
+twin_runs: 3             # number of future simulation runs
+
+# === EV behavior (required even if EV spots = 0) ===
+ev_share: 0.5
+power_rate: 0.3
+price_per_kWh: 0.25
+battery_init_mean: 0.4
+battery_target: 0.8
+battery_capacity_kWh: 50
+power_rate_kW: 7
+
+# === Simulation Policy ===
+policy: dynpricing        # dynamic pricing / balanced / fcfs
+max_wait: 1
+runs: 1                   # number of Monte Carlo simulations
+
+# === Elasticities (behavior-sensitive) ===
+elasticity:
+  price: 1.2
+  distance: 0.25
+  occupancy: 1.5
+  traffic: 0.3
+
+# === Event calendar (optional) ===
+event_calendar: []
+
+###############################################################
+#                  Only ONE parking lot here
+###############################################################
+
+lots:
+  - name: P023
+    type: commuter
+    capacity: 180
+    ev_spots: 0
+    price: 2.0
+    distance: 1
+    amenities_score: 0.8
+    weekend_multiplier: 1.0
+    price_min: 1.0
+    price_cap: 4.0
+
+###############################################################
+
+debug: false
+debug_sample_hours: 24
