@@ -6,7 +6,7 @@ seed: 42
 
 # === Data-driven arrivals ===
 arrival_mode: dataset
-dataset_path:  "dataset_P023_simready_updated.csv"
+dataset_path:  data/P023_sim/dataset_P023_simready_updated.csv
 
 # ====== DIGITAL TWIN OFFLINE (Forecast + Simulation) ======
 
