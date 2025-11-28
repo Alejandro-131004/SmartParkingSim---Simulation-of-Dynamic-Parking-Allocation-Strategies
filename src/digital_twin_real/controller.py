@@ -5,10 +5,10 @@ import simpy
 from policies import make_policy
 from model import Stats, Lot, _make_sample_duration, sampler
 
-from digital_twin.state_manager import StateManager
-from digital_twin.forecasting import Forecaster
-from digital_twin.sync import TwinSynchronizer
-from digital_twin.model_forecast import arrivals_from_forecast
+from digital_twin_real.state_manager import StateManager
+from digital_twin_real.forecasting import Forecaster
+from digital_twin_real.sync import TwinSynchronizer
+from digital_twin_real.model_forecast import arrivals_from_forecast
 
 
 class DigitalTwinController:
