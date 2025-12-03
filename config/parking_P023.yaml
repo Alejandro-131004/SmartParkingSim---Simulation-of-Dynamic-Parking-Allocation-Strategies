@@ -1,38 +1,54 @@
 ###############################################################
-#   Parking P023 – Standalone Simulation / Digital Twin YAML
+#   Parking P023 – Standalone Simulation + Digital Twin YAML
 ###############################################################
 
 seed: 42
+runs: 1
 
-# === Data-driven arrivals ===
+###############################################################
+# ARRIVAL MODE — DATASET-DRIVEN
+###############################################################
 arrival_mode: dataset
-dataset_path:  data/P023_sim/dataset_P023_simready_updated.csv
+dataset_path: data/P023_sim/dataset_P023_simready_updated.csv
 
-# ====== DIGITAL TWIN OFFLINE (Forecast + Simulation) ======
-
+###############################################################
+# DIGITAL TWIN (Forecast → Simulation)
+###############################################################
 twin_train_start: "2022-01-01"
 twin_train_end:   "2022-05-31"
 
 twin_test_start:  "2022-06-01"
 twin_test_end:    "2022-06-30"
 
-# Capacidade / EV config continua válida para SimPy
-ev_share: 0.5
-power_rate_kW: 7
-battery_init_mean: 0.4
-battery_target: 0.8
-battery_capacity_kWh: 50
-price_per_kWh: 0.25
-
-# ==========================
-# SIMPY SIMULATION CONFIG
-# ==========================
-
+###############################################################
+# DYNAMIC PRICING POLICY (IMPORTANT)
+###############################################################
 policy: dynpricing
 
-max_wait: 1
-runs: 1
+# DynamicPricingBalanced parameters (used directly in policies.py)
+target: 0.80        # desired occupancy
+k: 2.0              # price adjustment sensitivity
+p_min: 1.0          # minimum allowed price €/h
+p_max: 3.0          # maximum allowed price €/h
+interval: 5         # minutes between price updates
 
+###############################################################
+# LOT CONFIGURATION
+###############################################################
+lots:
+  - name: P023
+    type: commuter
+    capacity: 180
+    price: 1.5        # initial fixed price (dynamic pricing will update)
+    distance: 1.0
+
+    # EV charging
+    ev_spots: 10
+    chargers: 10
+
+###############################################################
+# ELASTICITIES (used in arrivals_for_lot)
+###############################################################
 elasticity:
   price: 1.2
   distance: 0.25
@@ -41,22 +57,19 @@ elasticity:
   energy_price: 0.8
   traffic: 0.3
 
-event_calendar: []
+###############################################################
+# EV CONFIG (used by driver())
+###############################################################
+ev_share: 0.5
+power_rate_kW: 7
+battery_init_mean: 0.4
+battery_target: 0.8
+battery_capacity_kWh: 50
+price_per_kWh: 0.25
 
-# ==========================
-# PARKING LOT CONFIG
-# ==========================
-
-lots:
-  - name: P023
-    type: commuter
-    capacity: 180
-    ev_spots: 10
-    price: 1.5
-    distance: 1
-    amenities_score: 0.8
-    weekend_multiplier: 1.0
-    price_min: 1.0
-    price_cap: 3.0
-
+###############################################################
+# SIMULATION PARAMETERS
+###############################################################
+max_wait: 1        # maximum tolerance to wait for a spot
 debug: false
+event_calendar: [] # you can add events if needed

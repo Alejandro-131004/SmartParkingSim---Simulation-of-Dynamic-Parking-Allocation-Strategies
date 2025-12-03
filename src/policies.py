@@ -5,6 +5,44 @@ def load(L):
     """Instantaneous utilization ratio of a lot."""
     return L.res.count / max(1, L.capacity)
 
+# -------------------------------
+# Simple internal occupancy forecaster
+# -------------------------------
+
+def predict_future_occupancy(lot, horizon=60, window=6):
+    """
+    Predict future occupancy using a moving average over the last 'window' samples.
+
+    Parameters
+    ----------
+    lot : Lot
+        The parking lot object.
+    horizon : int
+        Minutes ahead (not used directly here; placeholder for future improvements).
+    window : int
+        Number of past samples to average.
+
+    Returns
+    -------
+    float
+        Predicted normalized occupancy (0–1).
+    """
+
+    if not hasattr(lot, "_occ_history"):
+        # initialize
+        lot._occ_history = []
+
+    # store last known occupancy
+    occ_now = lot.res.count / max(1, lot.capacity)
+    lot._occ_history.append(occ_now)
+
+    # keep limited history
+    if len(lot._occ_history) > window:
+        lot._occ_history = lot._occ_history[-window:]
+
+    # simple moving average forecast
+    return sum(lot._occ_history) / len(lot._occ_history)
+
 # ---------- FCFS ----------
 class FCFS:
     """First-Come, First-Served: chooses cheapest, closest lot."""
@@ -103,28 +141,42 @@ class DynamicPricingBalanced:
         return lot.price
 
     def schedule(self, env, lots, stats):
-        """Periodically update lot prices based on occupancy and events."""
+        """
+        Periodically update lot prices based on predicted occupancy.
+
+        Prediction model:
+            - The price is adjusted based on the difference between forecast_occ and target.
+            - Uses simple moving-average forecast (predict_future_occupancy)
+            - target occupancy drives price movement
+            - price is bounded in [p_min, p_max]
+        """
         while True:
             for L in lots:
-                occ = self._occ(L)
-                new_p = L.price + self.k * (occ - self.target)
+                # ---- 1. Predict future occupancy ----
+                forecast_occ = predict_future_occupancy(L, horizon=60)
 
-                # --- Apply event-based price multiplier dynamically ---
+                # ---- 2. Compute new price via feedback control ----
+                # OCC(Occupancy) > target → increase price
+                # OCC(Occupancy) < target → decrease price
+                new_price = L.price + self.k * (forecast_occ - self.target)
+
+                # ---- 3. Event-based multiplier (existing logic) ----
                 for e in self.event_calendar:
                     day_start = e["day"] * 1440
                     if day_start <= env.now < day_start + 1440 and e["lot"] == L.name:
                         hour = (env.now % 1440) / 60.0
                         if e["start_hour"] <= hour < e["end_hour"]:
                             mult = e.get("price_multiplier", 1.0)
-                            new_p *= mult
-                            print(f"[PRICE INCREASE] {L.name} → {round(new_p, 2)} €/h "
-                                  f"(Event {e['day']} {e['start_hour']}-{e['end_hour']}h)")
+                            new_price *= mult
 
-                # Cap and store updated price
-                L.price = max(self.p_min, min(self.p_max, new_p))
+                # ---- 4. Apply bounds ----
+                L.price = max(self.p_min, min(self.p_max, new_price))
+
+                # ---- 5. Register price statistics ----
                 stats.price_sum[L.name] += L.price
                 stats.price_n[L.name] += 1
 
+            # update every "interval" minutes
             yield env.timeout(self.interval)
 
 # ---------- Probabilistic selector ----------
