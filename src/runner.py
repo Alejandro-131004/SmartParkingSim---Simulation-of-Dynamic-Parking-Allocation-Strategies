@@ -50,7 +50,7 @@ def main():
         test_start = pd.to_datetime(cfg["twin_test_start"])
         test_end   = pd.to_datetime(cfg["twin_test_end"])
 
-        print(f"Testing window : {test_start.date()} → {test_end.date()}\n")
+        print(f"Testing window : {test_start.date()} -> {test_end.date()}\n")
 
         mask_test = (df["date"] >= test_start) & (df["date"] <= test_end)
         df_test = df[mask_test].copy().sort_values("timestamp")
@@ -90,18 +90,46 @@ def main():
         print(f"RMSE: {rmse:.4f}")
         print(f"MAPE: {mape:.2f} %\n")
 
-        print("\n[3/3] Running Offline Digital Twin with dynamic pricing...")
+        print("\n[3/3] Running Offline Digital Twin...")
 
         simulator = OfflineDigitalTwinSimulator(cfg)
         df_arrivals = simulator.occupancy_to_arrivals(df_pred)
 
+        # --- Run 1: Static Baseline (No Policy, fixed price) ---
+        print(" -> Running Static Baseline...")
+        sim_results_static, _ = simulator.run_simulation(df_arrivals, policy=None)
+
+        # --- Run 2: Dynamic (With Policy) ---
+        print(" -> Running Dynamic Model...")
         policy = make_policy(cfg["policy"])
+        # Inject config parameters into policy
+        for attr in ["target", "k", "p_min", "p_max", "interval"]:
+            if attr in cfg and hasattr(policy, attr):
+                setattr(policy, attr, float(cfg[attr]) if attr != "interval" else int(cfg[attr]))
         if hasattr(policy, "set_elasticities"):
             policy.set_elasticities(cfg.get("elasticity", {}))
         if hasattr(policy, "set_event_calendar"):
             policy.set_event_calendar(cfg.get("event_calendar", []))
 
         sim_results, df_arrivals_out = simulator.run_simulation(df_arrivals, policy)
+
+        # --- Comparison Output ---
+        def get_metrics(res):
+            rev = res.get("revenue_total", 0.0)
+            avg_p = float(list(res.get("avg_price", {}).values())[0]) if res.get("avg_price") else 0.0
+            occ = res.get("occ_global", 0.0)
+            return rev, avg_p, occ
+
+        rev_s, price_s, occ_s = get_metrics(sim_results_static)
+        rev_d, price_d, occ_d = get_metrics(sim_results)
+
+        print("\n" + "="*50)
+        print(f"{'METRIC':<20} | {'STATIC':<10} | {'DYNAMIC':<10} | {'DELTA':<10}")
+        print("-" * 50)
+        print(f"{'Revenue (€)':<20} | {rev_s:10.2f} | {rev_d:10.2f} | {rev_d - rev_s:+10.2f}")
+        print(f"{'Avg Price (€)':<20} | {price_s:10.2f} | {price_d:10.2f} | {price_d - price_s:+10.2f}")
+        print(f"{'Avg Occupancy (%)':<20} | {occ_s*100:10.1f} | {occ_d*100:10.1f} | {(occ_d - occ_s)*100:+10.1f}")
+        print("="*50 + "\n")
 
         analysis = {
             "forecast_metrics": {
