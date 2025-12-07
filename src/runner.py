@@ -1,19 +1,103 @@
-import yaml, json, statistics
+import yaml
+import json
 import os
 import sys
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import pandas as pd
 import numpy as np
-from tqdm import tqdm
+import matplotlib.pyplot as plt
 
+# ==========================================
+# PATH CONFIGURATION
+# ==========================================
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
+# Add digital_twin_sim folder to path so internal imports work
+sys.path.append(os.path.join(current_dir, 'digital_twin_sim'))
+
+# ==========================================
+# IMPORTS
+# ==========================================
 from model import run_once
 from policies import make_policy
 
-from digital_twin_real.forecasting import Forecaster
-from digital_twin_sim.twin_offline_sim import OfflineDigitalTwinSimulator
+# Try importing the simulator with a fallback mechanism
+try:
+    from digital_twin_sim.twin_offline_sim import OfflineDigitalTwinSimulator
+except ImportError:
+    from digital_twin_sim.twin_offline_sim import OfflineDigitalTwinSimulator
 
 os.makedirs("reports", exist_ok=True)
 
+# ==========================================
+# HELPER FUNCTIONS (Mode 3)
+# ==========================================
+
+def calculate_metrics(occ_log, capacity=180):
+    """Calculates key metrics: Revenue, Avg Price, Avg Occupancy."""
+    df = pd.DataFrame(occ_log)
+    if df.empty:
+        return 0, 0, 0
+    
+    avg_price = df['price'].mean()
+    avg_occ = df['occ'].mean()
+    
+    # Revenue Estimation: Sum(Occupied Spots * Price * TimeDuration)
+    # Sampling interval is 5 minutes = 5/60 hours
+    time_step_hours = 5.0 / 60.0
+    occupied_spots = df['occ'] * capacity
+    revenue_step = occupied_spots * df['price'] * time_step_hours
+    total_revenue = revenue_step.sum()
+    
+    return total_revenue, avg_price, avg_occ
+
+def save_comparison_plot(static_log, dynamic_log, forecast_df, filename="comparison_plot.png"):
+    """Generates the Static vs Dynamic comparison plot."""
+    df_static = pd.DataFrame(static_log)
+    df_dynamic = pd.DataFrame(dynamic_log)
+    
+    # Create time axis based on forecast start
+    start_date = forecast_df.index[0]
+    df_static['datetime'] = start_date + pd.to_timedelta(df_static['t'], unit='m')
+    df_dynamic['datetime'] = start_date + pd.to_timedelta(df_dynamic['t'], unit='m')
+
+    plt.figure(figsize=(14, 8))
+    
+    # --- Subplot 1: Occupancy ---
+    plt.subplot(2, 1, 1)
+    # Zoom in on first 48h to see the curve clearly
+    limit_time = start_date + pd.to_timedelta(48, unit='h') 
+    mask_s = df_static['datetime'] < limit_time
+    mask_d = df_dynamic['datetime'] < limit_time
+    
+    plt.plot(df_static[mask_s]['datetime'], df_static[mask_s]['occ'] * 180, 
+             label='Static Pricing (Benchmark)', color='gray', linestyle='--', alpha=0.6)
+    
+    plt.plot(df_dynamic[mask_d]['datetime'], df_dynamic[mask_d]['occ'] * 180, 
+             label='Dynamic Pricing (Your Model)', color='blue', linewidth=2)
+            
+    plt.axhline(y=180*0.8, color='green', linestyle=':', label='Target (80%)')
+    plt.title("Occupancy: Static vs Dynamic (First 48h)")
+    plt.ylabel("Cars Parked")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    # --- Subplot 2: Price ---
+    plt.subplot(2, 1, 2)
+    plt.plot(df_static[mask_s]['datetime'], df_static[mask_s]['price'], 
+             label='Static Price', color='gray', linestyle='--')
+    plt.step(df_dynamic[mask_d]['datetime'], df_dynamic[mask_d]['price'], 
+             where='post', label='Dynamic Price', color='red')
+             
+    plt.title("Dynamic Price Strategy")
+    plt.ylabel("Price (€/h)")
+    plt.xlabel("Time")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(f"reports/{filename}")
+    print(f"[Visual] Plot saved to reports/{filename}")
+    plt.close()
 
 def convert_timestamps(obj):
     if isinstance(obj, dict):
@@ -24,156 +108,88 @@ def convert_timestamps(obj):
         return obj.isoformat()
     return obj
 
+# ==========================================
+# MAIN EXECUTION
+# ==========================================
 
 def main():
-
-    cfg = yaml.safe_load(open("config/parking_P023.yaml"))
-    print("EV share type:", type(cfg.get("ev_share")), "value:", cfg.get("ev_share"))
+    config_path = "config/parking_P023.yaml"
+    if not os.path.exists(config_path):
+        # Fallback if running from src root
+        config_path = "../config/parking_P023.yaml"
+        
+    try:
+        cfg = yaml.safe_load(open(config_path))
+    except FileNotFoundError:
+        print("Error: Configuration file not found. Run from project root.")
+        return
 
     print("\n================ Execution Mode ================")
-    print("1 - Normal Simulation (SimPy)")
-    print("2 - Digital Twin (Legacy - deprecated)")
-    print("3 - Offline Digital Twin (Forecast + SimPy Simulation + Evaluation)")
-    choice = input("\nSelect execution mode (1, 2, or 3): ").strip()
-
-    if choice == "3":
-        print("\n[MODE] Offline Digital Twin Activated (Chronos Enabled)\n")
-
-        df = pd.read_csv(cfg["dataset_path"])
-        df.columns = [c.strip().lower() for c in df.columns]
-        df["date"] = pd.to_datetime(df["date"])
-        if "hour" in df.columns:
-            df["timestamp"] = df["date"] + pd.to_timedelta(df["hour"], unit="h")
-        else:
-            raise ValueError("Dataset missing 'hour' column")
-
-        test_start = pd.to_datetime(cfg["twin_test_start"])
-        test_end   = pd.to_datetime(cfg["twin_test_end"])
-
-        print(f"Testing window : {test_start.date()} -> {test_end.date()}\n")
-
-        mask_test = (df["date"] >= test_start) & (df["date"] <= test_end)
-        df_test = df[mask_test].copy().sort_values("timestamp")
-
-        print("[1/3] Loading Amazon Chronos forecasting model...")
-        forecaster = Forecaster(cfg["dataset_path"])
-
-        print(f"[2/3] Generating rolling forecast for {len(df_test)} hours...")
-
-        forecasts = []
-        full_history = forecaster.df.sort_values("timestamp").reset_index(drop=True)
-
-        for idx, row in tqdm(df_test.iterrows(), total=len(df_test)):
-            current_time = row["timestamp"]
-            history_context = full_history[full_history["timestamp"] < current_time]
-            forecaster.df = history_context
-            try:
-                pred_occ = forecaster.predict_next_hours(horizon=1)[0]
-            except Exception as e:
-                print(f"Warning: Forecast failed at {current_time}, using 0. Error: {e}")
-                pred_occ = 0.0
-            forecasts.append(pred_occ)
-
-        df_test["forecast_occ"] = forecasts
-        df_pred = df_test
-
-        real = df_pred["occupancy"].values
-        pred = df_pred["forecast_occ"].values
-
-        mae = float(abs(pred - real).mean())
-        rmse = float(((pred - real) ** 2).mean() ** 0.5)
-        real_safe = np.clip(real, a_min=1, a_max=None)
-        mape = float((abs(pred - real) / real_safe).mean() * 100)
-
-        print("\n=== FORECAST METRICS ===")
-        print(f"MAE : {mae:.4f}")
-        print(f"RMSE: {rmse:.4f}")
-        print(f"MAPE: {mape:.2f} %\n")
-
-        print("\n[3/3] Running Offline Digital Twin...")
-
-        simulator = OfflineDigitalTwinSimulator(cfg)
-        df_arrivals = simulator.occupancy_to_arrivals(df_pred)
-
-        # --- Run 1: Static Baseline (No Policy, fixed price) ---
-        print(" -> Running Static Baseline...")
-        sim_results_static, _ = simulator.run_simulation(df_arrivals, policy=None)
-
-        # --- Run 2: Dynamic (With Policy) ---
-        print(" -> Running Dynamic Model...")
+    print("1 - Normal Simulation (SimPy - Original)")
+    print("3 - Offline Digital Twin (Comparative: Static vs Dynamic)")
+    
+    choice = input("\nSelect execution mode (1 or 3): ").strip()
+    if choice == "": choice = "3"
+    
+    # --- MODE 1: NORMAL SIMULATION ---
+    if choice == "1":
+        print("\n[MODE 1] Normal Simulation Selected\n")
         policy = make_policy(cfg["policy"])
-        # Inject config parameters into policy
-        for attr in ["target", "k", "p_min", "p_max", "interval"]:
-            if attr in cfg and hasattr(policy, attr):
-                setattr(policy, attr, float(cfg[attr]) if attr != "interval" else int(cfg[attr]))
-        if hasattr(policy, "set_elasticities"):
-            policy.set_elasticities(cfg.get("elasticity", {}))
-        if hasattr(policy, "set_event_calendar"):
-            policy.set_event_calendar(cfg.get("event_calendar", []))
+        if hasattr(policy, "set_elasticities"): policy.set_elasticities(cfg.get("elasticity", {}))
+        if hasattr(policy, "set_event_calendar"): policy.set_event_calendar(cfg.get("event_calendar", []))
 
-        sim_results, df_arrivals_out = simulator.run_simulation(df_arrivals, policy)
+        results = []
+        for r in range(cfg["runs"]):
+            seed = cfg["seed"] + r
+            out = run_once(cfg, policy, seed)
+            out["seed"] = seed
+            results.append(out)
 
-        # --- Comparison Output ---
-        def get_metrics(res):
-            rev = res.get("revenue_total", 0.0)
-            avg_p = float(list(res.get("avg_price", {}).values())[0]) if res.get("avg_price") else 0.0
-            occ = res.get("occ_global", 0.0)
-            return rev, avg_p, occ
+        pd.DataFrame(results).to_csv("reports/results_normal_sim.csv", index=False)
+        print("Saved normal simulation results.\n")
+        return
 
-        rev_s, price_s, occ_s = get_metrics(sim_results_static)
-        rev_d, price_d, occ_d = get_metrics(sim_results)
+    # --- MODE 3: COMPARATIVE DIGITAL TWIN ---
+    elif choice == "3":
+        print("\n[MODE 3] Offline Digital Twin - Comparative Analysis\n")
+        
+        sim = OfflineDigitalTwinSimulator(cfg)
+        
+        # 1. Benchmark (Static)
+        print(">>> Running Benchmark: STATIC Policy...")
+        StaticPolicyClass = make_policy("static")
+        log_static, df_forecast = sim.run(StaticPolicyClass)
+        rev_s, price_s, occ_s = calculate_metrics(log_static)
+        
+        # 2. Proposal (Dynamic)
+        print("\n>>> Running Proposal: DYNAMIC Policy...")
+        policy_name = cfg.get("policy", "dynpricing")
+        DynamicPolicyClass = make_policy(policy_name)
+        log_dynamic, _ = sim.run(DynamicPolicyClass) 
+        rev_d, price_d, occ_d = calculate_metrics(log_dynamic)
 
-        print("\n" + "="*50)
-        print(f"{'METRIC':<20} | {'STATIC':<10} | {'DYNAMIC':<10} | {'DELTA':<10}")
-        print("-" * 50)
-        print(f"{'Revenue (€)':<20} | {rev_s:10.2f} | {rev_d:10.2f} | {rev_d - rev_s:+10.2f}")
-        print(f"{'Avg Price (€)':<20} | {price_s:10.2f} | {price_d:10.2f} | {price_d - price_s:+10.2f}")
-        print(f"{'Avg Occupancy (%)':<20} | {occ_s*100:10.1f} | {occ_d*100:10.1f} | {(occ_d - occ_s)*100:+10.1f}")
-        print("="*50 + "\n")
+        # 3. Comparison Table
+        print("\n" + "="*60)
+        print(f"{'METRIC':<20} | {'STATIC':<12} | {'DYNAMIC':<12} | {'DELTA':<10}")
+        print("-" * 60)
+        print(f"{'Revenue (€)':<20} | {rev_s:12.2f} | {rev_d:12.2f} | {rev_d - rev_s:+10.2f}")
+        print(f"{'Avg Price (€)':<20} | {price_s:12.2f} | {price_d:12.2f} | {price_d - price_s:+10.2f}")
+        print(f"{'Avg Occupancy (%)':<20} | {occ_s*100:12.1f} | {occ_d*100:12.1f} | {(occ_d - occ_s)*100:+10.1f}")
+        print("="*60 + "\n")
 
+        # 4. Save Data and Plot
         analysis = {
-            "forecast_metrics": {
-                "MAE": mae,
-                "RMSE": rmse,
-                "MAPE": mape,
-            },
-            # forecast_vs_real removed (no longer used)
-            "forecast_vs_real": [],
-            "simulation_results": sim_results,
-            "forecast_arrivals": df_arrivals_out.to_dict(orient="records"),
+            "static": {"revenue": rev_s, "avg_price": price_s, "avg_occ": occ_s, "log": log_static},
+            "dynamic": {"revenue": rev_d, "avg_price": price_d, "avg_occ": occ_d, "log": log_dynamic}
         }
-
-        output_path = "reports/offline_digital_twin.json"
-        with open(output_path, "w") as f:
+        with open("reports/offline_digital_twin.json", "w") as f:
             json.dump(convert_timestamps(analysis), f, indent=2)
 
-        print(f"\nSaved:\n - {output_path}")
-        print(" - reports/offline_digital_twin.json\n")
+        save_comparison_plot(log_static, log_dynamic, df_forecast)
         return
 
-    if choice == "2":
-        print("\nDigital Twin Legacy mode disabled for this version.\n")
-        return
-
-    print("\n[MODE] Normal Simulation\n")
-
-    policy = make_policy(cfg["policy"])
-    if hasattr(policy, "set_elasticities"):
-        policy.set_elasticities(cfg.get("elasticity", {}))
-    if hasattr(policy, "set_event_calendar"):
-        policy.set_event_calendar(cfg.get("event_calendar", []))
-
-    results = []
-    for r in range(cfg["runs"]):
-        seed = cfg["seed"] + r
-        out = run_once(cfg, policy, seed)
-        out["seed"] = seed
-        results.append(out)
-
-    pd.DataFrame(results).to_csv("reports/results.csv", index=False)
-
-    print("Saved normal simulation results.\n")
-
+    else:
+        print("Invalid choice.")
 
 if __name__ == "__main__":
     main()
