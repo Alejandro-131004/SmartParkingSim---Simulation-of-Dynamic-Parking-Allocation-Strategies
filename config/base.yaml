@@ -2,7 +2,7 @@ seed: 42
 
 # === Data-driven arrivals ===
 arrival_mode: dataset
-dataset_path: "data/dataset_fluxos_hourly_2022.csv"
+dataset_path: data/P023_sim/dataset_P023_simready_updated.csv
 
 # === EV behavior ===
 ev_share: 0.5

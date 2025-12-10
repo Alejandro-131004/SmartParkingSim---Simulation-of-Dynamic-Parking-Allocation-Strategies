@@ -309,12 +309,6 @@ def driver(env, i, lots, policy, stats, sample_duration, max_wait, cfg):
                     if rem > 0:
                         yield env.timeout(rem)
                         lot.occ_update(env)
-                    stats.energy_delivered += energy_delivered
-                    stats.ev_served += 1
-                    stats.ev_got += 1
-                    stats.rev_park += lot.price
-                    stats.revenue = stats.rev_park + stats.rev_energy
-
 
                     #print(f"EV #{i} charged {energy:.2f} kWh at {price_now:.2f} €/kWh (hour={env.now/60:.1f})")
 

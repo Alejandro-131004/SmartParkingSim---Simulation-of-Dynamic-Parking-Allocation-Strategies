@@ -58,7 +58,7 @@
 		- 4.2.3. Estimar distribuições estatísticas (ex. Normal N(μ, σ²)) para cada intervalo.
 		- 4.2.4. Possível usar curve fitting ou jittering para aproximar padrões.
 		- 4.2.5. Objetivo: gerar ocupações sintéticas mas realistas para simulação.
-	- 4.3. Digital Twin 
+	- 4.3. Digital Twin (done)
 		- 4.3.1. É um modelo descritivo que simula a realidade do parque.
 		- 4.3.2. Permite testar políticas de preços e modificações (ex: número de lugares).
 		- 4.3.3. Baseado num modelo de ocupação por chegada (entrada/saída de carros).
@@ -79,7 +79,7 @@
 			- 4.4.4.2. P(carro sai do parque | trânsito confortável).
 			- 4.4.4.3. Base para o modelo de decisão.
 	- 4.5. Generalização
-		- 4.5.1. Fazer o modelo para um parque piloto.
+		- 4.5.1. Fazer o modelo para um parque piloto. (done)
 		- 4.5.2. Depois, generalizar a metodologia para outros parques.
 		- 4.5.3. Avaliar escalabilidade e capacidade de previsão.
 
@@ -99,3 +99,13 @@
 - 4.5.2. Depois, generalizar a metodologia para outros parques (ex: testar o código com o parque P064).
 
 - 4.5.3. Avaliar escalabilidade e capacidade de previsão (verificar se o modelo mantém a precisão noutros cenários).
+
+
+---
+
+Testar no yaml (varios modelos de preço):
+Conservador: target: 0.7, k: 1.0, p_min: 1.0, p_max: 2.0
+
+Agressivo: target: 0.9, k: 3.0, p_min: 1.0, p_max: 3.0
+
+Lento: interval: 15 (preço ajusta-se mais devagar)
