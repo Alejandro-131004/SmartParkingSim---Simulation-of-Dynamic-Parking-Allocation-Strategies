@@ -62,20 +62,35 @@ class Stats:
         self.profit = 0.0
         self.energy_cost = 0.0
         self.maintenance_cost = 0.0
-                # --- Debug counters ---
-        self.arrivals_expected_by_lot = {}   # lot -> sum(adj_entries)
-        self.arrivals_spawned_by_lot  = {}   # lot -> number of env.process(driver(...)) started
-        self.served_by_lot            = {}   # lot -> served count (increment on successful parking end)
-        self.rejected_by_lot          = {}   # lot -> rejected count (no spot / no EV)
+        # --- Debug counters ---
+        self.arrivals_expected_by_lot = {}
+        self.arrivals_spawned_by_lot  = {}
+        self.served_by_lot            = {}
+        self.rejected_by_lot          = {}
         self.rejected_reason          = {"no_spot": 0, "no_ev": 0}
 
-
-
     def to_dict(self, lots, T):
-        occ = {L.name: L.occ_time / (T * L.capacity) for L in lots}
+        # FIX: Avoid division by zero
+        safe_T = max(1, T)
+
+        # 1. Individual Occupancy
+        occ = {L.name: L.occ_time / (safe_T * max(1, L.capacity)) for L in lots}
+        
+        # 2. Global Occupancy (Weighted Average)
+        # Sum of all occupied minutes across all lots / Total capacity minutes available
+        total_capacity = sum(L.capacity for L in lots)
+        total_occ_time = sum(L.occ_time for L in lots)
+        
+        if total_capacity > 0:
+            occ_global = total_occ_time / (safe_T * total_capacity)
+        else:
+            occ_global = 0.0
+
         avg_price = {k: (self.price_sum[k] / max(1, self.price_n[k])) for k in self.price_sum}
+        
+        # FIX: Rejection rate based on actual arrivals
         rej_rate = self.rejected / max(1, self.arrivals)
-        occ_global = float(np.mean(list(occ.values()))) if occ else 0.0
+        
         wait_p50 = float(np.percentile(self.wait, 50)) if self.wait else 0.0
         wait_p95 = float(np.percentile(self.wait, 95)) if self.wait else 0.0
         redir_rate = self.redirect_success / max(1, self.redirected)
@@ -109,22 +124,21 @@ class Stats:
             "redirect_success_rate": redir_rate
         }
 
-
-
 # --- Dynamic energy price by time of day ---
-# --- Smooth dynamic energy price (€/kWh) ---
 def energy_price(t_min, weekend=False,
                  p_base=0.22,       # baseline
                  amp1=0.06,         # main daily amplitude
                  amp2=0.02,         # secondary harmonic
-                 phase1=14.0,       # peak ~14:00
-                 phase2=20.0,       # secondary ~20:00
+                 phase1=8.0,        # peak ~14:00 (8 + 6 = 14)
+                 phase2=14.0,       # secondary ~20:00 (14 + 6 = 20)
                  p_min=0.14, p_max=0.36,
                  ar_rho=0.9):
     """Continuous price with daily harmonics + AR(1) noise. t_min is minutes from 0."""
     h = (t_min / 60.0) % 24.0
     # deterministic signal: 2 harmonics
     import math
+    # Explanation: sine peaks at pi/2 (quarter cycle). 
+    # Quarter of 24h is 6h. So Peak = phase + 6.
     s1 = amp1 * math.sin(2*math.pi*(h - phase1)/24.0)
     s2 = amp2 * math.sin(4*math.pi*(h - phase2)/24.0)
     # weekend discount
@@ -138,21 +152,20 @@ def energy_price(t_min, weekend=False,
     return max(p_min, min(p_max, p))
 
 # --- Time-varying arrival rate (arrivals per minute) ---
-# --- Determine season by day of year ---
 def season_of_day(t_min):
     """Return season based on day of year (assuming 365 days)."""
-    day = int(t_min // 1440)
+    # FIX: Modulo 365 to handle multi-year simulations
+    day = int((t_min // 1440) % 365)
+    
     if   0 <= day < 79:   return "winter"
     elif 79 <= day < 171: return "spring"
     elif 171 <= day < 263:return "summer"
     elif 263 <= day < 354:return "autumn"
     else:                 return "winter"
 
-# --- Time-varying arrival rate with seasonal and event modifiers ---
 def lambda_of_t(t_min, cfg):
     """Piecewise-smooth arrival rate, modulated by season and events."""
     h = (t_min / 60.0) % 24.0
-    # base shape (0–24h)
     base = (0.2 if h < 6 else
             1.2 + 0.6*(h-6) if h < 9 else
             3.0 if h < 12 else
@@ -160,11 +173,9 @@ def lambda_of_t(t_min, cfg):
             2.6 if h < 20 else
             0.8)
 
-    # --- Seasonal modifier ---
     season = season_of_day(t_min)
     mult = cfg.get("season_multiplier", {}).get(season, 1.0)
 
-    # --- Event effects ---
     for e in cfg.get("event_calendar", []):
         day_start = e["day"] * 1440
         if day_start <= t_min < day_start + 1440:
@@ -176,11 +187,19 @@ def lambda_of_t(t_min, cfg):
 
 def find_closest_available(lots, current_lot, max_distance=2.0):
     """Return closest alternative lot with available spots, or None if none within threshold."""
-    available = [L for L in lots if L.res.count < L.capacity and L.name != current_lot.name]
+    available = [L for L in lots if L.res.count < L.capacity]
+    if current_lot:
+        available = [L for L in available if L.name != current_lot.name]
+    
     if not available:
         return None
-    closest = min(available, key=lambda L: L.distance)
-    if abs(closest.distance - current_lot.distance) <= max_distance:
+    
+    # FIX: Sort by distance relative to current_lot (or 0.0 if None)
+    # Using simple linear distance difference as per original logic
+    ref_dist = current_lot.distance if current_lot else 0.0
+    closest = min(available, key=lambda L: abs(L.distance - ref_dist))
+    
+    if abs(closest.distance - ref_dist) <= max_distance:
         return closest
     return None
 
@@ -189,24 +208,21 @@ def driver(env, i, lots, policy, stats, sample_duration, max_wait, cfg):
     arrival = env.now
     is_ev = random.random() < float(cfg.get("ev_share", 0))
 
-    # --- Driver chooses an initial lot (may be full) ---
     lot = policy.choose(lots, now=env.now)
 
-    # --- Case 1: No lot selected at all ---
     if lot is None:
         stats.rejected += 1
         stats.rej_no_spot += 1
         alt = find_closest_available(lots, None, max_distance=3.0)
         if alt:
             stats.redirected += 1
-            yield env.timeout(abs(alt.distance) * 2.0)  # travel time
+            yield env.timeout(abs(alt.distance) * 2.0)
             stats.redirect_success += 1
             lot = alt
         else:
             stats.redirect_fail += 1
             return
 
-    # --- Try to park in chosen lot ---
     lot.occ_update(env)
     with lot.res.request() as req:
         start = env.now
@@ -214,7 +230,6 @@ def driver(env, i, lots, policy, stats, sample_duration, max_wait, cfg):
         res = yield req | env.timeout(mw)
         waited = env.now - start
 
-        # --- Case 2: Spot unavailable, attempt redirect ---
         if req not in res:
             alt = find_closest_available(lots, lot, max_distance=3.0)
             if alt:
@@ -226,7 +241,6 @@ def driver(env, i, lots, policy, stats, sample_duration, max_wait, cfg):
                     stats.redirect_success += 1
                     lot = alt
                     lot.occ_update(env)
-                    # retry parking once
                     with lot.res.request() as req2:
                         res2 = yield req2 | env.timeout(mw)
                         if req2 not in res2:
@@ -244,7 +258,6 @@ def driver(env, i, lots, policy, stats, sample_duration, max_wait, cfg):
                 stats.rej_no_spot += 1
                 return
 
-        # --- Normal parking process ---
         stats.wait.append(waited)
         dur = float(sample_duration())
 
@@ -258,7 +271,7 @@ def driver(env, i, lots, policy, stats, sample_duration, max_wait, cfg):
                 with lot.ev_res.request() as evreq:
                     ev_res = yield evreq | env.timeout(mw)
                     if evreq not in ev_res:
-                        # --- Try redirect if no EV spot available ---
+                        # Redirect EV if charger full? (Simplified: same as before)
                         alt = find_closest_available(lots, lot, max_distance=3.0)
                         if alt and getattr(alt, "ev_res", None):
                             stats.redirected += 1
@@ -276,23 +289,19 @@ def driver(env, i, lots, policy, stats, sample_duration, max_wait, cfg):
                             stats.rej_no_ev += 1
                             return
 
-                    # --- Charging phase ---
                     battery_capacity = cfg.get("battery_capacity_kWh", 50.0)
-                    energy_needed = (soc_target - soc_init) * battery_capacity  # kWh
-                    power_rate = float(cfg.get("power_rate_kW", 7.0))           # kW
-                    charge_time = (energy_needed / max(power_rate, 1e-9)) * 60.0  # minutes
+                    energy_needed = (soc_target - soc_init) * battery_capacity
+                    power_rate = float(cfg.get("power_rate_kW", 7.0))
+                    charge_time = (energy_needed / max(power_rate, 1e-9)) * 60.0
 
-                    # define actual_time BEFORE using it
                     actual_time = min(dur, charge_time)
-
-                    # Bill energy hour-by-hour with variable price
                     remaining_time = actual_time
                     energy_delivered = 0.0
 
                     while remaining_time > 0:
-                        step = min(60, remaining_time)            # minutes
-                        price_now = energy_price(env.now)         # €/kWh
-                        energy_step = (step / 60.0) * power_rate  # kWh
+                        step = min(60, remaining_time)
+                        price_now = energy_price(env.now)
+                        energy_step = (step / 60.0) * power_rate
                         stats.rev_energy += energy_step * price_now
                         energy_delivered += energy_step
                         yield env.timeout(step)
@@ -309,10 +318,6 @@ def driver(env, i, lots, policy, stats, sample_duration, max_wait, cfg):
                     if rem > 0:
                         yield env.timeout(rem)
                         lot.occ_update(env)
-
-                    #print(f"EV #{i} charged {energy:.2f} kWh at {price_now:.2f} €/kWh (hour={env.now/60:.1f})")
-
-                    
             else:
                 yield env.timeout(dur)
                 lot.occ_update(env)
@@ -329,26 +334,17 @@ def driver(env, i, lots, policy, stats, sample_duration, max_wait, cfg):
         stats.served_by_lot[lot.name] = stats.served_by_lot.get(lot.name, 0) + 1
         
 import pandas as pd
-import math, random
 
 def arrivals_from_hourly_dataset(env, lots, policy, stats, cfg, sample_duration):
     """Generate arrivals based on the hourly dataset (one SimPy process per lot)."""
     dataset_path = cfg.get("dataset_path", "dataset_fluxos_hourly_2022.csv")
     df = pd.read_csv(dataset_path)
 
-    # Normalize columns
     df.columns = [c.strip().lower() for c in df.columns]
-    required = {"parking_lot", "date", "hour", "entries"}
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(f"Dataset missing required columns: {missing}")
-
-    # Ensure chronological order per lot
     df = df.sort_values(["parking_lot", "date", "hour"])
 
     print(f"[INFO] Loaded dataset with {len(df)} hourly records from {dataset_path}")
 
-    # Create a SimPy process per lot
     for lot in lots:
         df_lot = df[df["parking_lot"] == lot.name].copy()
         if df_lot.empty:
@@ -356,11 +352,10 @@ def arrivals_from_hourly_dataset(env, lots, policy, stats, cfg, sample_duration)
             continue
         env.process(arrivals_for_lot(env, lot, df_lot, policy, stats, cfg, sample_duration))
 
-
 def arrivals_for_lot(env, lot, df_lot, policy, stats, cfg, sample_duration):
     """
     Simulate arrivals and departures for one parking lot based on hourly dataset.
-    Uses both 'entries' and 'exits' columns.
+    FIX: Correctly processes entries and exits in parallel to match 60min clock.
     """
     df_lot = df_lot.sort_values(["date", "hour"]).copy()
     df_lot["date"] = pd.to_datetime(df_lot["date"])
@@ -375,6 +370,29 @@ def arrivals_for_lot(env, lot, df_lot, policy, stats, cfg, sample_duration):
     base_price = float(lot.price)
     last_abs_hour = None
 
+    # --- Helper processes for parallelism ---
+    def process_entries(env, count, interval, abs_hour):
+        for i in range(count):
+            stats.arrivals += 1
+            stats.arrivals_spawned_by_lot[lot.name] = stats.arrivals_spawned_by_lot.get(lot.name, 0) + 1
+            env.process(driver(
+                env,
+                f"{lot.name}_{abs_hour}_{i}",
+                [lot],
+                policy,
+                stats,
+                sample_duration=sample_duration,
+                max_wait=max_wait,
+                cfg=cfg
+            ))
+            yield env.timeout(interval)
+
+    def process_exits(env, count, interval):
+        for _ in range(count):
+            if lot.res.count > 0 and lot.res.users:
+                lot.res.release(lot.res.users[0])
+            yield env.timeout(interval)
+
     for _, row in df_lot.iterrows():
         abs_hour = int(row["abs_hour"])
         n_in = int(row.get("entries", 0))
@@ -384,14 +402,12 @@ def arrivals_for_lot(env, lot, df_lot, policy, stats, cfg, sample_duration):
         temp_max = row.get("temp_max_c", None)
         temp_mean = ((float(temp_min) + float(temp_max)) / 2.0) if pd.notna(temp_min) and pd.notna(temp_max) else 22.0
 
-        # Avança no tempo se houver hiatos
         if last_abs_hour is not None:
             gap_hours = abs_hour - last_abs_hour - 1
             if gap_hours > 0:
                 yield env.timeout(gap_hours * 60)
         last_abs_hour = abs_hour
 
-        # Fatores contextuais (afetam só as entradas)
         if base_price > 0:
             price_factor = max(0.2, 1 - alpha_price * (lot.price - base_price) / base_price)
         else:
@@ -402,51 +418,27 @@ def arrivals_for_lot(env, lot, df_lot, policy, stats, cfg, sample_duration):
         adj_entries = int(round(n_in * price_factor * traffic_factor * temp_factor))
         stats.arrivals_expected_by_lot[lot.name] += adj_entries
 
-        _dbg(cfg, f"[HOUR] lot={lot.name} hour={abs_hour} in={n_in}→{adj_entries} out={n_out} "
-                  f"factors: price={price_factor:.2f}, traffic={traffic_factor:.2f}, temp={temp_factor:.2f}")
-
-        # --- Process incoming cars uniformly over the hour ---
+        # FIX: Process entries and exits concurrently, but block main loop for exactly 60m
         if adj_entries > 0:
-            interval_in = 60.0 / adj_entries
-            for i in range(adj_entries):
-                stats.arrivals += 1
-                stats.arrivals_spawned_by_lot[lot.name] = stats.arrivals_spawned_by_lot.get(lot.name, 0) + 1
-                env.process(driver(
-                    env,
-                    f"{lot.name}_{abs_hour}_{i}",
-                    [lot],
-                    policy,
-                    stats,
-                    sample_duration=sample_duration,
-                    max_wait=max_wait,
-                    cfg=cfg
-                ))
-                yield env.timeout(interval_in)
-
-        # --- Process departures (free spots) uniformly over the same hour ---
+            env.process(process_entries(env, adj_entries, 60.0 / adj_entries, abs_hour))
+        
         if n_out > 0:
-            interval_out = 60.0 / n_out
-            for _ in range(n_out):
-                # Remove one car if there is anyone parked
-                if lot.res.count > 0 and lot.res.users:
-                    lot.res.release(lot.res.users[0])
-                yield env.timeout(interval_out)
+            env.process(process_exits(env, n_out, 60.0 / n_out))
 
+        yield env.timeout(60.0)
 
 def _make_sample_duration(cfg):
-    """Return a callable duration sampler. Uses YAML if present; otherwise a safe default."""
-    # 1) Se existir duration_lognorm no YAML, usa
+    """Return a callable duration sampler."""
     dl = cfg.get("duration_lognorm")
     if isinstance(dl, dict) and "mean" in dl and "sigma" in dl:
         m, s = float(dl["mean"]), float(dl["sigma"])
         return lambda: float(np.random.lognormal(m, s))
 
-    # 2) Senão, um default razoável (mediana ~ 60–90 min)
-    return lambda: float(np.random.lognormal(2.0, 0.6))
-
+    # FIX: Default mean=4.1 (exp(4.1) ~ 60 mins), not 2.0 (7 mins)
+    return lambda: float(np.random.lognormal(4.1, 0.6))
 
 def sampler(env, lots, stats, step=5):
-    """Sample system state every 'step' minutes for time-series analysis."""
+    """Sample system state every 'step' minutes."""
     while True:
         row = {"t": env.now}
         for L in lots:
@@ -460,26 +452,14 @@ def sampler(env, lots, stats, step=5):
 
 def _compute_horizon_minutes(dataset_path: str, cfg: dict) -> int:
     df = pd.read_csv(dataset_path)
-
-    # Basic schema check
-    cols = [c.strip().lower() for c in df.columns]
-    _dbg(cfg, f"[DATA] Columns: {cols}")
-
-    # Parse times
+    df.columns = [c.strip().lower() for c in df.columns]
     df["date"] = pd.to_datetime(df["date"])
     df["hour"] = pd.to_numeric(df["hour"], errors="coerce").fillna(0).astype(int)
-
     ts = df["date"] + pd.to_timedelta(df["hour"], unit="h")
     start = ts.min()
     end   = ts.max() + pd.Timedelta(hours=1)
-
     T = int((end - start).total_seconds() // 60)
-    _dbg(cfg, f"[DATA] Date range: {start} → {end} (minutes={T})")
-    _dbg(cfg, f"[DATA] Lots in CSV: {sorted(df['parking_lot'].unique().tolist())}")
-    _dbg(cfg, f"[DATA] Records total: {len(df)}")
-
     return max(T, 0)
-
 
 def run_once(cfg, policy, seed):
     random.seed(seed)
@@ -487,7 +467,6 @@ def run_once(cfg, policy, seed):
     env = simpy.Environment()
     stats = Stats()
 
-    # --- Initialize lots ---
     lots = [Lot(**d) for d in cfg["lots"]]
     for L in lots:
         L.build(env)
@@ -495,42 +474,18 @@ def run_once(cfg, policy, seed):
         stats.arrivals_spawned_by_lot[L.name]  = 0
         stats.served_by_lot[L.name]            = 0
         stats.rejected_by_lot[L.name]          = 0
-
         stats.price_sum[L.name] = 0.0
         stats.price_n[L.name] = 0
 
-    # --- Optional dynamic pricing ---
     if hasattr(policy, "schedule"):
         env.process(policy.schedule(env, lots, stats))
 
-    # --- Pick arrivals mode ---
     if cfg.get("arrival_mode") == "dataset":
         sample_duration = _make_sample_duration(cfg)
         arrivals_from_hourly_dataset(env, lots, policy, stats, cfg, sample_duration)
         T = _compute_horizon_minutes(cfg.get("dataset_path", "dataset_fluxos_hourly_2022.csv"), cfg)
-
-
-    # --- Sampler ---
+    
     env.process(sampler(env, lots, stats, step=5))
-
-    # --- Run simulation ---
     env.run(until=T)
-        # --- Consistency checks (debug) ---
-    if cfg.get("debug", False):
-        print("\n[CHECK] Arrivals (spawned) by lot:", stats.arrivals_spawned_by_lot)
-        print("[CHECK] Expected (adj_entries) by lot:", stats.arrivals_expected_by_lot)
-        print("[CHECK] Served by lot:", stats.served_by_lot)
-        print("[CHECK] Rejected by lot:", stats.rejected_by_lot)
-        print("[CHECK] Rejected by reason:", stats.rejected_reason)
-
-        total_spawned = sum(stats.arrivals_spawned_by_lot.values())
-        total_served  = sum(stats.served_by_lot.values())
-        total_rej     = sum(stats.rejected_by_lot.values())
-
-        print(f"[CHECK] totals -> spawned={total_spawned}  served={total_served}  rejected={total_rej}")
-        if total_spawned != (total_served + total_rej):
-            print("[WARN] spawned != served + rejected. Redirections and timeouts might explain gaps.")
-
-
-    # Use T as the horizon in summaries
+    
     return stats.to_dict(lots, T)

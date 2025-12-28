@@ -34,12 +34,13 @@ os.makedirs("reports", exist_ok=True)
 # ---------------------------------------------------------
 # METRIC COMPUTATION
 # ---------------------------------------------------------
+
 def calculate_metrics(occ_log, capacity):
     """
     Calculates simulation metrics.
-    ARGS:
-        occ_log: List of dictionaries with simulation steps.
-        capacity: Int, total capacity of the parking lot (MUST BE PASSED EXPLICITLY).
+    metric: Demand Delta (%)
+      > 0: Induced Demand (Gain)
+      < 0: Lost Customers (Loss)
     """
     df = pd.DataFrame(occ_log)
     if df.empty:
@@ -51,18 +52,20 @@ def calculate_metrics(occ_log, capacity):
     # Each step corresponds to 5 minutes
     time_step_hours = 5.0 / 60.0
     
-    # Revenue = occupancy_ratio * capacity * price * time_per_step
     revenue = (df["occ"] * capacity * df["price"] * time_step_hours).sum()
     
     total_demand = df["base_entries"].sum()
     total_served = df["actual_entries"].sum()
     
     if total_demand > 0:
-        rejection_rate = (1 - (total_served / total_demand)) * 100.0
+        # NEW LOGIC: (Served - Demand) / Demand
+        # Result: +5.0 means we served 5% MORE than baseline (Gain)
+        # Result: -5.0 means we served 5% LESS than baseline (Loss)
+        demand_delta_pct = ((total_served - total_demand) / total_demand) * 100.0
     else:
-        rejection_rate = 0.0
+        demand_delta_pct = 0.0
         
-    return revenue, avg_price, avg_occ, rejection_rate
+    return revenue, avg_price, avg_occ, demand_delta_pct
 # ---------------------------------------------------------
 # DATA EXPORT
 # ---------------------------------------------------------
@@ -365,7 +368,7 @@ def main():
             print(f"{'Revenue (€)':<20} | {rev_s:12.2f} | {rev_d:12.2f} | {rev_d - rev_s:+10.2f}")
             print(f"{'Avg Price (€)':<20} | {price_s:12.2f} | {price_d:12.2f} | {price_d - price_s:+10.2f}")
             print(f"{'Avg Occupancy (%)':<20} | {occ_s*100:12.1f} | {occ_d*100:12.1f} | {(occ_d - occ_s)*100:+10.1f}")
-            print(f"{'Lost Customers (%)':<20} | {rej_s:12.1f} | {rej_d:12.1f} | {rej_d - rej_s:+10.1f}")
+            print(f"{'Demand Change (%)':<20} | {rej_s:+12.1f} | {rej_d:+12.1f} | {rej_d - rej_s:+10.1f}") # Positive = Gain, Negative = Loss
             print("=" * 65 + "\n")
 
             save_static_plot(log_s, log_d, df_f)

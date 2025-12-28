@@ -5,10 +5,6 @@ def load(L):
     """Instantaneous utilization ratio of a lot."""
     return L.res.count / max(1, L.capacity)
 
-# -------------------------------
-# Simple internal occupancy forecaster
-# -------------------------------
-
 def predict_future_occupancy(lot, horizon=60, window=6):
     """Predict future occupancy using a moving average."""
     if not hasattr(lot, "_occ_history"):
@@ -40,8 +36,8 @@ class BalancedCost:
 
 # ---------- DynamicPricingBalanced ----------
 class DynamicPricingBalanced:
-    def __init__(self, alpha=0.1, beta=2.5, target=0.8, k=1,
-                 p_min=1.5, p_max=4.0, interval=2, max_wait_min=10):
+    def __init__(self, alpha=0.1, beta=2.5, target=0.8, k=5,
+                 p_min=1.5, p_max=4.0, interval=15, max_wait_min=10):
         self.alpha, self.beta = alpha, beta
         self.target, self.k = target, k
         self.p_min, self.p_max = p_min, p_max
@@ -83,23 +79,43 @@ class DynamicPricingBalanced:
     def schedule(self, env, lots, stats):
         while True:
             for L in lots:
+                # 1. Forecast Occupancy
                 forecast_occ = predict_future_occupancy(L, horizon=60)
-                new_price = L.price + self.k * (forecast_occ - self.target)
                 
-                # Event multiplier
+                # 2. Base Price 
+                base_price = getattr(L, "price_min", self.p_min)
+                
+                # 3. Proportional Control Logic
+                # If occupancy > target, add penalty. 
+                # If occupancy <= target, price reverts to base_price.
+                occupancy_delta = max(0.0, forecast_occ - self.target)
+                
+                # Target price = Base + (Excess * Gain)
+                target_price = base_price + (occupancy_delta * self.k)
+                
+                # 4. Event Multiplier
+                # Recalculate event multiplier for schedule context
+                multiplier = 1.0
                 for e in self.event_calendar:
                     day_start = e["day"] * 1440
                     if day_start <= env.now < day_start + 1440 and e["lot"] == L.name:
                         hour = (env.now % 1440) / 60.0
                         if e["start_hour"] <= hour < e["end_hour"]:
-                            new_price *= e.get("price_multiplier", 1.0)
-                            
+                            multiplier *= e.get("price_multiplier", 1.0)
+                
+                target_price *= multiplier
+                
+                # 5. Smooth Update (EMA)
+                alpha = 0.2
+                new_price = (1 - alpha) * L.price + alpha * target_price
+                
                 L.price = max(self.p_min, min(self.p_max, new_price))
                 stats.price_sum[L.name] += L.price
                 stats.price_n[L.name] += 1
+                
             yield env.timeout(self.interval)
 
-# ---------- StaticPricing (NEW) ----------
+# ---------- StaticPricing ----------
 class StaticPricing(DynamicPricingBalanced):
     """
     Static Pricing Policy.
@@ -112,10 +128,21 @@ class StaticPricing(DynamicPricingBalanced):
 
 # ---------- Factory ----------
 def make_policy(name):
+    # Handle dict config case
+    if isinstance(name, dict):
+        p_type = name.get("type", "balanced")
+        if p_type == "dynpricing":
+            return DynamicPricingBalanced(
+                target=float(name.get("target_occupancy", 0.8)),
+                k=float(name.get("k", 5.0)),
+                p_min=float(name.get("p_min", 1.5))
+            )
+        name = p_type
+
     if name == "fcfs": return FCFS()
     if name == "balanced": return BalancedCost()
     if name == "dynpricing": return DynamicPricingBalanced()
-    if name == "static": return StaticPricing()  # <--- FIXED: Added handling for 'static'
+    if name == "static": return StaticPricing()
     raise ValueError(f"Unknown policy: {name}")
 
 # ---------- Probabilistic selector ----------
