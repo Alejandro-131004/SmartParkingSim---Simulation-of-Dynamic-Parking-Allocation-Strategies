@@ -28,6 +28,11 @@ class OccupancyForecaster:
         df_30min['entries'] = df['entries'].resample('30min').ffill() / 2.0
         df_30min['exits'] = df['exits'].resample('30min').ffill() / 2.0
         
+        # Temp is state (mean)
+        if 'temp_min_c' in df.columns:
+            df_30min['temp_min_c'] = df['temp_min_c'].resample('30min').ffill()
+            df_30min['temp_max_c'] = df['temp_max_c'].resample('30min').ffill()
+        
         # Traffic score is a state (mean)
         if 'traffic_score' in df.columns:
             df_30min['traffic'] = df['traffic_score'].resample('30min').interpolate(method='linear')
@@ -42,7 +47,7 @@ class OccupancyForecaster:
         df_30min['is_weekend'] = df_30min.index.dayofweek >= 5 
         
         # 4. Calculate stats (Mean and Std Dev)
-        metrics = ['occupancy', 'entries', 'exits', 'traffic']
+        metrics = ['occupancy', 'entries', 'exits', 'traffic', 'temp_min_c', 'temp_max_c']
         
         self.stats = df_30min.groupby(['is_weekend', 'minute_of_day'])[metrics].agg(['mean', 'std'])
         self.stats = self.stats.fillna(0.0)
@@ -50,17 +55,45 @@ class OccupancyForecaster:
         print(f"[Forecaster] Model fitted. Profiles learned for: {metrics}")
         print(f"[Forecaster] Global Average Traffic Score: {self.traffic_base_avg:.2f}")
 
+    def _generate_correlated_noise(self, n_steps, sigma, phi=0.9):
+        """
+        Generates a correlated noise sequence (AR(1) process).
+        x_t = phi * x_{t-1} + (1 - phi) * white_noise
+        Scales the result to have approximately 'sigma' standard deviation.
+        """
+        white_noise = np.random.normal(0, 1, n_steps)
+        noise = np.zeros(n_steps)
+        # Initialize
+        noise[0] = white_noise[0]
+        for t in range(1, n_steps):
+            noise[t] = phi * noise[t-1] + np.sqrt(1 - phi**2) * white_noise[t]
+        
+        return noise * sigma
+
     def predict(self, start_date, end_date, stochastic=False):
         if self.stats.empty:
             raise ValueError("Model not trained.")
             
         dates = pd.date_range(start=start_date, end=end_date, freq='5min')
+        n_steps = len(dates)
         
         # Prepare output structure
-        cols = ['occupancy_pred', 'entries_pred', 'exits_pred', 'traffic_pred']
-        data = {c: [] for c in cols}
+        cols = ['occupancy_pred', 'entries_pred', 'exits_pred', 'traffic_pred', 'temp_min_c', 'temp_max_c']
+        data = {c: np.zeros(n_steps) for c in cols}
         
-        for ts in dates:
+        # Pre-generate noise if stochastic
+        noise_vectors = {}
+        if stochastic:
+            # We use a fixed sigma estimate for the noise generation to simplify
+            # Or we could just generate N(0,1) correlated noise and scale it later by local sigma.
+            # Let's generate unit variance correlated noise and scale by local sigma.
+            for col in cols:
+                # phi=0.95 gives very smooth, slow-moving noise (good for occupancy)
+                # phi=0.7 gives bit more jagged noise (good for flow)
+                phi = 0.95 if 'occupancy' in col else 0.8
+                noise_vectors[col] = self._generate_correlated_noise(n_steps, sigma=1.0, phi=phi)
+        
+        for i, ts in enumerate(dates):
             minute_of_day = ts.hour * 60 + ts.minute
             lookup_minute = (minute_of_day // 30) * 30
             is_weekend = ts.dayofweek >= 5
@@ -68,7 +101,7 @@ class OccupancyForecaster:
             try:
                 slot_stats = self.stats.loc[(is_weekend, lookup_minute)]
                 
-                for metric, col_name in zip(['occupancy', 'entries', 'exits', 'traffic'], cols):
+                for metric, col_name in zip(['occupancy', 'entries', 'exits', 'traffic', 'temp_min_c', 'temp_max_c'], cols):
                     mu = slot_stats[metric]['mean']
                     sigma = slot_stats[metric]['std']
                     
@@ -77,16 +110,23 @@ class OccupancyForecaster:
                         mu /= 6.0
                         sigma /= np.sqrt(6.0)
                     
+                    val = mu
                     if stochastic:
-                        val = np.random.normal(mu, sigma)
-                    else:
-                        val = mu
-                    
+                        # Apply pre-generated correlated noise scaled by local sigma
+                        if sigma > 0:
+                            noise_val = noise_vectors[col_name][i]
+                            val += noise_val * sigma
+                        else:
+                            # If sigma is 0, add small jitter to avoid flat lines if requested
+                            pass
+
                     # Constraints
                     val = max(0.0, val)
-                    data[col_name].append(val)
+                    data[col_name][i] = val
                 
             except KeyError:
-                for c in cols: data[c].append(0.0)
+                pass # Default is 0.0
             
-        return pd.DataFrame(data, index=dates)
+        df_res = pd.DataFrame(data, index=dates)
+        df_res['avg_temp'] = (df_res['temp_min_c'] + df_res['temp_max_c']) / 2.0
+        return df_res

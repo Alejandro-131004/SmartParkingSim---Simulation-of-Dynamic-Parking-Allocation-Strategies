@@ -62,12 +62,41 @@ class OfflineDigitalTwinSimulator:
             yield env.timeout(interval)
 
 
+    def _calculate_sigmoid_elasticity(self, price_ratio, k=5.0, weather_score=0.0):
+        """
+        Sigmoid Elasticity Function with Weather Adaptation.
+        Returns a demand multiplier between 0.0 and 3.0 (weather can boost demand).
+        
+        Args:
+            price_ratio (float): Current Price / Base Price.
+            k (float): Steepness.
+            weather_score (float): 0.0 (Good) to 1.0 (Bad).
+                                   Bad weather reduces price sensitivity and increases max demand.
+        """
+        # 1. Weather makes people less price sensitive (Willingness to Pay increases)
+        # effectively "shrinking" the price ratio.
+        # e.g. Price 1.5x feels like 1.15x if score is 1.0
+        effective_ratio = price_ratio / (1.0 + 0.3 * weather_score)
+
+        # 2. Main Sigmoid
+        val = k * (effective_ratio - 1.0)
+        val = max(-100, min(100, val)) 
+        base_factor = 2.0 / (1.0 + np.exp(val))
+
+        # 3. Weather-driven Demand Surge (if price is favorable)
+        # If price is low/fair, bad weather drives even more people to park (comfort/necessity)
+        if effective_ratio < 1.05:
+            base_factor *= (1.0 + 0.5 * weather_score) # Max 1.5x boost on top of 2.0x = 3.0x
+
+        return base_factor
+
     def simulate_flow_dynamics(self, env, lot, stats, df_forecast, elasticity_cfg, base_price, events_cfg=None):
         """
-        Full Parking-Flow Simulation including:
-        1. Entry Elasticity (Price + Traffic)
-        2. Exit Friction (Traffic-Induced Blocking) — Task 4.4.4.2
-        3. Event-Based Demand Uplift — Instructor Requirement
+        State-Based Simulation (Occupancy Driven).
+        The usage of the parking lot is determined directly by the demand curve (forecast),
+        modulated by price elasticity.
+        
+        Occupancy = Forecast_Occupancy * Price_Factor
         """
         if events_cfg is None:
             events_cfg = []
@@ -76,22 +105,9 @@ class OfflineDigitalTwinSimulator:
         elast_price = elasticity_cfg.get("price", 1.2)
         elast_traffic = elasticity_cfg.get("traffic", 0.3)
 
-        # Exit friction: how strongly traffic reduces exit throughput
-        # Example: 0.5 means that if traffic doubles, exit speed becomes 1/sqrt(2)
-        exit_friction = elasticity_cfg.get("exit_friction", 0.5)
-
         # Initialize simulation state
         start_time = df_forecast.index[0]
         
-        # FIX: Get the first row directly from the dataframe to initialize
-        first_row = df_forecast.iloc[0]
-        real_occ = first_row.get("occupancy_real", None)
-        
-        if real_occ is None:
-            real_occ = first_row["occupancy_pred"]
-
-        lot.res.count = max(0.0, min(real_occ, lot.capacity))
-
         # Main simulation loop
         for ts, row in df_forecast.iterrows():
 
@@ -107,78 +123,86 @@ class OfflineDigitalTwinSimulator:
             # 0. CHECK FOR EVENT-BASED DEMAND UPLIFT
             # ------------------------------------------------------
             event_factor = 1.0
-            # 'day' in config usually refers to day_of_year (1-365)
             current_day = ts.dayofyear
             current_hour = ts.hour + ts.minute / 60.0
 
             for event in events_cfg:
-                # Check if event is active today
                 if event.get("day") == current_day:
                     if event.get("start_hour") <= current_hour < event.get("end_hour"):
                         uplift = event.get("demand_uplift", 1.0)
                         event_factor *= uplift
-                        
-                        # Debug Print for events
-                        print(f"[DEBUG EVENT] Day {current_day} Hour {current_hour:.2f}: Applying uplift {uplift}")
+                        # print(f"[DEBUG EVENT] Day {current_day} Hour {current_hour:.2f}: Applying uplift {uplift}")
 
             # ------------------------------------------------------
-            # 1. READ BASE DEMAND AND TRAFFIC CONDITIONS
+            # 1. READ BASE DEMAND (Occupancy & Flow)
             # ------------------------------------------------------
-            scale = self.cfg.get("flow_scale", 6.0)   # default: 6x more flow for 5-min from 30-min base
-            base_entries = row["entries_pred"] * scale * event_factor
-            base_exits   = row["exits_pred"] * scale
-
+            # We use the forecast directly. No internal scaling needed as OccupancyForecaster
+            # provides the correct absolute values.
+            base_occ = row["occupancy_pred"] * event_factor
+            
+            # We still read flow for metrics, but it doesn't drive the state.
+            base_entries = row["entries_pred"] * event_factor 
+            
             current_traffic = row["traffic_pred"]
 
             # ------------------------------------------------------
-            # 2. COMPUTE ENTRIES (Probability of Entry)
+            # 2. COMPUTE ELASTICITY FACTORS
             # ------------------------------------------------------
 
-            # Price elasticity
+            # Price elasticity (Sigmoid Model)
+            # Factor goes from 2.0 (cheap) to 0.0 (expensive), centered at 1.0 (base price)
+            # Price elasticity with Weather
+            # Factor goes from 3.0 (cheap+storm) to 0.0 (expensive)
             price_factor = 1.0
-            if base_price > 0 and base_entries > 0:
-                price_ratio = max(0.2, min(5.0, lot.price / base_price))
-                price_factor = price_ratio ** (-elast_price)
+            
+            # Calculate Weather Score (0.0 good -> 1.0 bad) from avg_temp
+            # Assume 20C is ideal. Deviation > 10C is bad.
+            avg_temp = row.get("avg_temp", 20.0)
+            weather_score = min(1.0, abs(avg_temp - 20.0) / 10.0)
 
-            # Traffic elasticity for entry flow
-            traffic_factor_in = 1.0
+            if base_price > 0:
+                price_ratio = lot.price / base_price
+                price_factor = self._calculate_sigmoid_elasticity(price_ratio, k=5.0, weather_score=weather_score)
+
+            # Traffic elasticity (Traffic reduces demand/access)
+            traffic_factor = 1.0
             if self.traffic_avg_ref > 0 and current_traffic > 0:
                 traffic_ratio = current_traffic / self.traffic_avg_ref
+                # Simple model: heavy traffic reduces demand slightly (friction) 
+                # or increases it (diverted from street)? 
+                # Preserving original logic: traffic modifies "entries" probability.
+                # Here we map it to occupancy capacity.
                 traffic_ratio = max(0.5, min(2.0, traffic_ratio))
-                traffic_factor_in = traffic_ratio ** (-elast_traffic)
+                traffic_factor = traffic_ratio ** (-elast_traffic)
 
-            actual_entries = base_entries * price_factor * traffic_factor_in
+            # Total modifier
+            total_factor = price_factor * traffic_factor
 
             # ------------------------------------------------------
-            # 3. COMPUTE EXITS (Traffic-Constrained Throughput)
+            # 3. SET PARKING STATE DIRECTLY
             # ------------------------------------------------------
-            # Total cars wanting to exit now (new + previously blocked)
-            total_pending_exits = base_exits + lot.delayed_exits_queue
-
-            # Exit throughput reduction due to traffic
-            exit_throughput_factor = 1.0
-            if self.traffic_avg_ref > 0 and current_traffic > 0:
-                if current_traffic > self.traffic_avg_ref:
-                    t_ratio = current_traffic / self.traffic_avg_ref
-                    exit_throughput_factor = 1.0 / (t_ratio ** exit_friction)
-
-            # Realizable number of exits given traffic blockages
-            possible_exits = total_pending_exits * exit_throughput_factor
-
-            # Update exit queue (blocked cars)
-            lot.delayed_exits_queue = total_pending_exits - possible_exits
-            actual_exits = possible_exits
-
-            # Reporting variables
+            # The occupancy is the base demand modulated by our policy (price) and environment (traffic)
+            target_occ = base_occ * total_factor
+            
+            # Physical constraint
+            final_occ = max(0.0, min(target_occ, lot.capacity))
+            
+            # Update the resource (instantaneously set)
+            # In SimPy resources we usually do request/release, but here we force the level
+            # for the Digital Twin approximation.
+            if hasattr(lot.res, 'count'):
+                 lot.res.count = final_occ
+            
+            # ------------------------------------------------------
+            # 4. UPDATE METRICS (Entries/Exits)
+            # ------------------------------------------------------
+            # We estimate "actual entries" based on the ratio of serviced demand
+            # If we reduced occupancy by 10% due to price, we implicitly rejected 10% of entries.
             lot.current_base_entries = base_entries
-            lot.current_actual_entries = actual_entries
-
-            # ------------------------------------------------------
-            # 4. UPDATE PARKING LOT STATE
-            # ------------------------------------------------------
-            new_count = lot.res.count + actual_entries - actual_exits
-            new_count = max(0.0, min(new_count, lot.capacity))
-            lot.res.count = new_count
+            lot.current_actual_entries = base_entries * total_factor
+            
+            # Delayed exits concept is removed in State-Based mode as we don't track flow accumulation
+            lot.delayed_exits_queue = 0.0
 
     
 
@@ -250,6 +274,14 @@ class OfflineDigitalTwinSimulator:
         
         print(f"[Twin] Generating Forecast...")
         df_forecast = forecaster.predict(test_start, test_end, stochastic=True)
+
+        # Apply Demand Multiplier (Scenario Testing)
+        demand_mult = self.cfg.get("demand_multiplier", 1.0)
+        if demand_mult != 1.0:
+            # print(f"[Twin] Applying Demand Multiplier: {demand_mult}x")
+            df_forecast['occupancy_pred'] *= demand_mult
+            df_forecast['entries_pred'] *= demand_mult
+            # Ensure capacity constraints (simulation logic handles it, but forecast should be unbounded to show potential)
 
         # Sync real data for comparison
         df_full['datetime'] = pd.to_datetime(df_full['date']) + pd.to_timedelta(df_full['hour'], unit='h')
