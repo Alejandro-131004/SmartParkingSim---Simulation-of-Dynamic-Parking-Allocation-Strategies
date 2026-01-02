@@ -44,7 +44,7 @@ def calculate_metrics(occ_log, capacity):
     """
     df = pd.DataFrame(occ_log)
     if df.empty:
-        return 0, 0, 0, 0
+        return 0, 0, 0, 0, 0
     
     avg_price = df["price"].mean()
     avg_occ = df["occ"].mean()
@@ -57,15 +57,16 @@ def calculate_metrics(occ_log, capacity):
     total_demand = df["base_entries"].sum()
     total_served = df["actual_entries"].sum()
     
+    # METRIC 1: REJECTION % (Saturation)
+    # What % of potential demand was lost due to capacity/price?
     if total_demand > 0:
-        # NEW LOGIC: (Served - Demand) / Demand
-        # Result: +5.0 means we served 5% MORE than baseline (Gain)
-        # Result: -5.0 means we served 5% LESS than baseline (Loss)
-        demand_delta_pct = ((total_served - total_demand) / total_demand) * 100.0
+        rejection_pct = ((total_demand - total_served) / total_demand) * 100.0
     else:
-        demand_delta_pct = 0.0
+        rejection_pct = 0.0
         
-    return revenue, avg_price, avg_occ, demand_delta_pct
+    # Total Served is returned for Delta calculation in main loop
+    return revenue, avg_price, avg_occ, rejection_pct, total_served
+
 # ---------------------------------------------------------
 # DATA EXPORT
 # ---------------------------------------------------------
@@ -311,69 +312,89 @@ def main():
             cfg["policy"]["p_min"] = args.p_min
         # ----------------------------------------
 
-        sim = OfflineDigitalTwinSimulator(cfg)
-
         # EXTRACT CAPACITY FROM CONFIG
         lot_capacity = cfg["lots"][0]["capacity"]
 
-        # 1. Benchmark: STATIC
-        if not args.silent: print(">>> Running Benchmark: STATIC...")
-        log_s, df_f = sim.run(make_policy("static"))
-        rev_s, price_s, occ_s, rej_s = calculate_metrics(log_s, capacity=lot_capacity)
+        # ---------------------------------------------------------
+        # SCENARIO LOOP
+        # ---------------------------------------------------------
+        scenarios = {"Base": 1.0, "2x_Demand": 2.0, "3x_Demand": 3.0}
         
-        # 2. Benchmark: DYNAMIC (Proposal)
-        if not args.silent: print("\n>>> Running Proposal: DYNAMIC...")
-        
-        # --- CORREÇÃO DE NOME DA POLÍTICA ---
-        # O nome correto no policies.py é "dynpricing"
-        p_type = cfg["policy"].get("type", "dynpricing")
-        
-        # Se por acaso a config tiver "dynamic" ou "linear", forçamos "dynpricing"
-        if p_type in ["dynamic", "linear"]:
-            p_type = "dynpricing"
+        for sc_name, sc_mult in scenarios.items():
+            print(f"\n>>> Running Scenario: {sc_name} (Multiplier: {sc_mult}x)")
+            try:
+                sys.stdout.flush() # Force print to show up
+            except: pass
+            
+            # Update Config
+            cfg["demand_multiplier"] = sc_mult
+            
+            # Re-initialize Sim to ensure clean state
+            sim = OfflineDigitalTwinSimulator(cfg)
 
-        # Instanciar a política correta
-        dyn_policy = make_policy(p_type)
+            # 1. Benchmark: STATIC
+            if not args.silent: print(f"    [{sc_name}] Running Benchmark: STATIC...")
+            log_s, df_f = sim.run(make_policy("static"))
+            rev_s, price_s, occ_s, rej_s, served_s = calculate_metrics(log_s, capacity=lot_capacity)
+            
+            # 2. Benchmark: DYNAMIC (Proposal)
+            if not args.silent: print(f"    [{sc_name}] Running Proposal: DYNAMIC...")
+            
+            # Instanciar a política correta
+            p_type = cfg["policy"].get("type", "dynpricing")
+            if p_type in ["dynamic", "linear"]: p_type = "dynpricing"
+            dyn_policy = make_policy(p_type)
 
-        # Atualizar os parâmetros no objeto da política
-        # A classe DynamicPricingBalanced usa 'self.target', 'self.k', etc.
-        if "target_occupancy" in cfg["policy"]:
-            dyn_policy.target = cfg["policy"]["target_occupancy"]
-        if "k" in cfg["policy"]:
-            dyn_policy.k = cfg["policy"]["k"]
-        if "p_min" in cfg["policy"]:
-            dyn_policy.p_min = cfg["policy"]["p_min"]
-        
-        # Run simulation
-        log_d, _ = sim.run(dyn_policy)
-        rev_d, price_d, occ_d, rej_d = calculate_metrics(log_d, capacity=lot_capacity)
+            # Atualizar os parâmetros
+            if "target_occupancy" in cfg["policy"]: dyn_policy.target = cfg["policy"]["target_occupancy"]
+            if "k" in cfg["policy"]: dyn_policy.k = cfg["policy"]["k"]
+            if "p_min" in cfg["policy"]: dyn_policy.p_min = cfg["policy"]["p_min"]
+            
+            # Run simulation
+            log_d, _ = sim.run(dyn_policy)
+            rev_d, price_d, occ_d, rej_d, served_d = calculate_metrics(log_d, capacity=lot_capacity)
+            
+            # Calculate Delta (Dynamic vs Static served)
+            if served_s > 0:
+                 delta_demand_pct = ((served_d - served_s) / served_s) * 100.0
+            else:
+                 delta_demand_pct = 0.0
 
-        # 3. Output Handling
-        if args.silent:
-            output_data = {
-                "target": args.target if args.target is not None else cfg["policy"].get("target_occupancy", 0),
-                "k": args.k if args.k is not None else cfg["policy"].get("k", 0),
-                "p_min": args.p_min if args.p_min is not None else cfg["policy"].get("p_min", 0),
-                "static_revenue": rev_s,
-                "dynamic_revenue": rev_d,
-                "dynamic_price": price_d,
-                "dynamic_occ": occ_d,
-                "lost_pct": rej_d
-            }
-            print(json.dumps(output_data))
-        else:
-            print("\n" + "=" * 65)
-            print(f"{'METRIC':<20} | {'STATIC':<12} | {'DYNAMIC':<12} | {'DELTA':<10}")
-            print("-" * 65)
-            print(f"{'Revenue (€)':<20} | {rev_s:12.2f} | {rev_d:12.2f} | {rev_d - rev_s:+10.2f}")
-            print(f"{'Avg Price (€)':<20} | {price_s:12.2f} | {price_d:12.2f} | {price_d - price_s:+10.2f}")
-            print(f"{'Avg Occupancy (%)':<20} | {occ_s*100:12.1f} | {occ_d*100:12.1f} | {(occ_d - occ_s)*100:+10.1f}")
-            print(f"{'Demand Change (%)':<20} | {rej_s:+12.1f} | {rej_d:+12.1f} | {rej_d - rej_s:+10.1f}") # Positive = Gain, Negative = Loss
-            print("=" * 65 + "\n")
+            # 3. Output Handling
+            if args.silent:
+                # Append scenario name to JSON if needed, or just print multiple objects?
+                # For now let's print one JSON per scenario line
+                output_data = {
+                    "scenario": sc_name,
+                    "target": args.target if args.target is not None else cfg["policy"].get("target_occupancy", 0),
+                    "k": args.k if args.k is not None else cfg["policy"].get("k", 0),
+                    "p_min": args.p_min if args.p_min is not None else cfg["policy"].get("p_min", 0),
+                    "static_revenue": rev_s,
+                    "dynamic_revenue": rev_d,
+                    "dynamic_price": price_d,
+                    "dynamic_occ": occ_d,
+                    "rejection_pct": rej_d,
+                    "delta_demand_pct": delta_demand_pct
+                }
+                print(json.dumps(output_data))
+            else:
+                print("\n" + "=" * 80)
+                print(f"SCENARIO: {sc_name:<10} | {'METRIC':<18} | {'STATIC':<10} | {'DYNAMIC':<10} | {'DELTA':<8}")
+                print("-" * 80)
+                print(f"{' ':24} | {'Revenue (€)':<18} | {rev_s:10.2f} | {rev_d:10.2f} | {rev_d - rev_s:+8.2f}")
+                print(f"{' ':24} | {'Avg Price (€)':<18} | {price_s:10.2f} | {price_d:10.2f} | {price_d - price_s:+8.2f}")
+                print(f"{' ':24} | {'Avg Occ (%)':<18} | {occ_s*100:10.1f} | {occ_d*100:10.1f} | {(occ_d - occ_s)*100:+8.1f}")
+                print(f"{' ':24} | {'Rejection (%)':<18} | {rej_s:10.1f} | {rej_d:10.1f} | {rej_d - rej_s:+8.1f}") 
+                print(f"{' ':24} | {'Demand Delta(%)':<18} | {'---':^10} | {delta_demand_pct:+10.1f} | {' ':>8}")
+                print("=" * 80 + "\n")
+                try:
+                    sys.stdout.flush()
+                except: pass
 
-            save_static_plot(log_s, log_d, df_f)
-            save_interactive_plot(log_s, log_d, df_f)
-            save_csv_results(log_s, log_d, df_f)
+                suffix = f"_{sc_name}"
+                save_static_plot(log_s, log_d, df_f, filename=f"comparison_plot{suffix}.png")
+                save_interactive_plot(log_s, log_d, df_f, filename=f"comparison_interactive{suffix}.html")
+                save_csv_results(log_s, log_d, df_f, filename=f"comparison_data{suffix}.csv")
 
 
 if __name__ == "__main__":

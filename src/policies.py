@@ -36,8 +36,8 @@ class BalancedCost:
 
 # ---------- DynamicPricingBalanced ----------
 class DynamicPricingBalanced:
-    def __init__(self, alpha=0.1, beta=2.5, target=0.8, k=5,
-                 p_min=1.5, p_max=4.0, interval=15, max_wait_min=10):
+    def __init__(self, alpha=0.1, beta=2.5, target=0.8, k=1.0,
+                 p_min=0.0, p_max=50.0, interval=15, max_wait_min=10):
         self.alpha, self.beta = alpha, beta
         self.target, self.k = target, k
         self.p_min, self.p_max = p_min, p_max
@@ -45,6 +45,10 @@ class DynamicPricingBalanced:
         self._mw = max_wait_min
         self.elasticities = {}
         self.event_calendar = []
+        
+        # Stability / Revenue Tracking
+        self.last_price = {}
+        self.last_revenue = {}
 
     def set_elasticities(self, elasticities):
         self.elasticities = elasticities or {}
@@ -77,24 +81,62 @@ class DynamicPricingBalanced:
     def pay(self, lot, payment): return lot.price
 
     def schedule(self, env, lots, stats):
+        # Initialize tracking for existing lots
+        for L in lots:
+            self.last_price[L.name] = L.price
+            # Initial estimate or 0
+            self.last_revenue[L.name] = (L.res.count / max(1, L.capacity)) * L.capacity * L.price
+
         while True:
             for L in lots:
-                # 1. Forecast Occupancy
+                # ---------------------------------------------------------
+                # 0. Measure Current State (Result of previous interval)
+                # ---------------------------------------------------------
+                current_occ_count = L.res.count
+                current_price = L.price
+                # Revenue Rate = Occupancy * Price
+                current_revenue = current_occ_count * current_price
+                
+                prev_price = self.last_price.get(L.name, current_price)
+                prev_revenue = self.last_revenue.get(L.name, current_revenue)
+                
+                # 1. Forecast Occupancy (For control error)
                 forecast_occ = predict_future_occupancy(L, horizon=60)
                 
-                # 2. Base Price 
-                base_price = getattr(L, "price_min", self.p_min)
+                # ---------------------------------------------------------
+                # 2. PROFIT GUARDRAIL CHECK
+                # ---------------------------------------------------------
+                # Logic: If we raised price, but revenue dropped significantly, 
+                # then we passed the saturation point. Revert/Cut.
                 
-                # 3. Proportional Control Logic
-                # If occupancy > target, add penalty. 
-                # If occupancy <= target, price reverts to base_price.
-                occupancy_delta = max(0.0, forecast_occ - self.target)
+                guard_triggered = False
+                revenue_drop_threshold = 0.95 # 5% drop tolerance
                 
-                # Target price = Base + (Excess * Gain)
-                target_price = base_price + (occupancy_delta * self.k)
+                # Check if price was increased recently (compare current to prev)
+                # Note: 'L.price' is the one we set in the LAST iteration.
+                if current_price > prev_price:
+                    # We are in a price hike cycle. Did it work?
+                    if current_revenue < prev_revenue * revenue_drop_threshold:
+                        # BAD outcome: Price Up -> Revenue Down.
+                        # Action: Cut price to recover demand.
+                        # Revert to previous price or usually slightly lower to regain trust/momentum
+                        # print(f"[Guard] {L.name}: Price hiked {prev_price:.2f}->{current_price:.2f} but Revenue fell {prev_revenue:.2f}->{current_revenue:.2f}. Cutting.")
+                        new_price_target = prev_price * 0.9 # Hard cut
+                        guard_triggered = True
                 
-                # 4. Event Multiplier
-                # Recalculate event multiplier for schedule context
+                # ---------------------------------------------------------
+                # 3. Integral Control (Normal Operation)
+                # ---------------------------------------------------------
+                if not guard_triggered:
+                    # Standard I-Controller
+                    error = forecast_occ - self.target
+                    price_change = error * self.k
+                    
+                    # Add damping to prevent oscillation? 
+                    # For now keep simple Integral
+                    new_price_target = current_price + price_change
+
+                # 4. Event Multiplier (Simplified application)
                 multiplier = 1.0
                 for e in self.event_calendar:
                     day_start = e["day"] * 1440
@@ -103,13 +145,20 @@ class DynamicPricingBalanced:
                         if e["start_hour"] <= hour < e["end_hour"]:
                             multiplier *= e.get("price_multiplier", 1.0)
                 
-                target_price *= multiplier
+                new_price_target *= multiplier
                 
-                # 5. Smooth Update (EMA)
-                alpha = 0.2
-                new_price = (1 - alpha) * L.price + alpha * target_price
+                # 5. Smooth Update? 
+                # If Guard triggered, we want immediate impact. 
+                # If Normal, maybe smooth?
+                # Let's apply direct update to avoid "lag" fighting the guard.
                 
-                L.price = max(self.p_min, min(self.p_max, new_price))
+                final_price = max(self.p_min, min(self.p_max, new_price_target))
+                
+                # Update State
+                self.last_price[L.name] = final_price # Store what we are setting NOW for NEXT check
+                self.last_revenue[L.name] = current_revenue # Store result of OLD price
+                
+                L.price = final_price
                 stats.price_sum[L.name] += L.price
                 stats.price_n[L.name] += 1
                 
@@ -135,7 +184,7 @@ def make_policy(name):
             return DynamicPricingBalanced(
                 target=float(name.get("target_occupancy", 0.8)),
                 k=float(name.get("k", 5.0)),
-                p_min=float(name.get("p_min", 1.5))
+                p_min=float(name.get("p_min", 0.0))
             )
         name = p_type
 
