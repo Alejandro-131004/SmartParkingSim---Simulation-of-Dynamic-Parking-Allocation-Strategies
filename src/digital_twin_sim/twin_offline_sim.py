@@ -62,7 +62,7 @@ class OfflineDigitalTwinSimulator:
             yield env.timeout(interval)
 
 
-    def _calculate_sigmoid_elasticity(self, price_ratio, k=5.0, weather_score=0.0):
+    def _calculate_sigmoid_elasticity(self, price_ratio, k=2.0, weather_score=0.0):
         """
         Sigmoid Elasticity Function with Weather Adaptation.
         Returns a demand multiplier between 0.0 and 3.0 (weather can boost demand).
