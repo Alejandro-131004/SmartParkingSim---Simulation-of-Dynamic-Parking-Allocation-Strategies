@@ -19,4 +19,3 @@ zipp==3.23.0
 
 
 
-source env_simpy/bin/activate  
