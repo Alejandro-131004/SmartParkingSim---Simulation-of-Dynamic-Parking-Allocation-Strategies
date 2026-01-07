@@ -70,17 +70,18 @@ def calculate_metrics(occ_log, capacity):
 # ---------------------------------------------------------
 # DATA EXPORT
 # ---------------------------------------------------------
-def save_csv_results(static_log, dynamic_log, forecast_df, filename="comparison_data.csv"):
+def save_csv_results(static_log, dynamic_log, forecast_df, filename="comparison_data.csv",
+                     label_1="Static", label_2="Dynamic"):
     df_s = pd.DataFrame(static_log)
     df_d = pd.DataFrame(dynamic_log)
     start_date = forecast_df.index[0]
     
     df_comb = pd.DataFrame()
     df_comb["datetime"] = start_date + pd.to_timedelta(df_s["t"], unit="m")
-    df_comb["static_occ"] = df_s["occ"].values * 180
-    df_comb["dynamic_occ"] = df_d["occ"].values * 180
-    df_comb["static_price"] = df_s["price"].values
-    df_comb["dynamic_price"] = df_d["price"].values
+    df_comb[f"{label_1}_occ"] = df_s["occ"].values * 180
+    df_comb[f"{label_2}_occ"] = df_d["occ"].values * 180
+    df_comb[f"{label_1}_price"] = df_s["price"].values
+    df_comb[f"{label_2}_price"] = df_d["price"].values
     df_comb["traffic_score"] = df_d["traffic"].values
     
     df_comb["base_entries"] = df_d["base_entries"].values
@@ -91,128 +92,143 @@ def save_csv_results(static_log, dynamic_log, forecast_df, filename="comparison_
     print(f"[Data] CSV exported to reports/{filename}")
 
 # ---------------------------------------------------------
-# INTERACTIVE PLOT (PLOTLY)
+# PLOTTING
 # ---------------------------------------------------------
-def save_interactive_plot(static_log, dynamic_log, forecast_df, filename="comparison_interactive.html"):
-    if not PLOTLY_AVAILABLE:
-        return
 
-    df_s = pd.DataFrame(static_log)
-    df_d = pd.DataFrame(dynamic_log)
+def save_simple_plot(log_data, forecast_df, filename="simple_plot.png", label="Real"):
+    """
+    Simplified Plot: Predicted vs Real Occupancy only.
+    No thresholds, no clutter.
+    """
+    df = pd.DataFrame(log_data)
     start_date = forecast_df.index[0]
-    times = start_date + pd.to_timedelta(df_s["t"], unit="m")
-
-    fig = make_subplots(
-        rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03,
-        subplot_titles=(
-            "Occupancy (Vehicles)",
-            "Price (€/h)",
-            "Urban Traffic Score",
-            "Lost Customers per Interval (5 min)"
-        )
-    )
-
-    # 1. Occupancy
-    fig.add_trace(
-        go.Scatter(x=times, y=df_s["occ"] * 180, name="Static", 
-                   line=dict(color="gray", dash="dash")),
-        row=1, col=1
-    )
-    fig.add_trace(
-        go.Scatter(x=times, y=df_d["occ"] * 180, name="Dynamic", 
-                   line=dict(color="blue")),
-        row=1, col=1
-    )
-    fig.add_hline(y=180 * 0.8, line_dash="dot", line_color="green", row=1, col=1)
-
-    # 2. Price
-    fig.add_trace(
-        go.Scatter(x=times, y=df_d["price"], name="Price", 
-                   line=dict(color="red", shape="hv")),
-        row=2, col=1
-    )
-
-    # 3. Traffic
-    fig.add_trace(
-        go.Scatter(x=times, y=df_d["traffic"], name="Traffic", 
-                   line=dict(color="orange"), fill="tozeroy"),
-        row=3, col=1
-    )
-
-    # 4. Lost Customers
-    lost = df_d["base_entries"] - df_d["actual_entries"]
-    fig.add_trace(
-        go.Bar(x=times, y=lost, name="Lost Customers", marker_color="purple"),
-        row=4, col=1
-    )
-
-    fig.update_layout(
-        height=1000,
-        title_text="Digital Twin: Full Analysis (Occupancy / Price / Traffic / Demand Loss)",
-        hovermode="x unified"
-    )
-
-    fig.write_html(f"reports/{filename}")
-    print(f"[Visual] Interactive chart saved to reports/{filename}")
-
-# ---------------------------------------------------------
-# STATIC PLOT (MATPLOTLIB)
-# ---------------------------------------------------------
-def save_static_plot(static_log, dynamic_log, forecast_df, filename="comparison_plot.png"):
-    df_s = pd.DataFrame(static_log)
-    df_d = pd.DataFrame(dynamic_log)
-    start_date = forecast_df.index[0]
-    times = start_date + pd.to_timedelta(df_s["t"], unit="m")
-
-    plt.figure(figsize=(14, 12))
+    times = start_date + pd.to_timedelta(df["t"], unit="m")
     
-    limit = start_date + pd.to_timedelta(48, unit="h")
+    plt.figure(figsize=(14, 6)) # Shorter height (single plot)
+    
+    limit = start_date + pd.to_timedelta(48, unit="h") # Zoom to first 48h for clarity? Or full?
+    # User said "the real vs predicted". Usually implies full range or zoomed.
+    # Let's show full range if it's a monthly simulation, but 48h is better for detail.
+    # Actually, previous plot limited to 48h. I'll stick to 48h for clarity unless requested otherwise.
     mask = times < limit
-
-    # 1. Occupancy
-    plt.subplot(4, 1, 1)
-    plt.plot(times[mask], df_s[mask]["occ"] * 180, label="Static", color="gray", linestyle="--")
-    plt.plot(times[mask], df_d[mask]["occ"] * 180, label="Dynamic", color="blue")
-    plt.axhline(y=180 * 0.8, color="green", linestyle=":", label="Target")
+    fc_mask = forecast_df.index < limit
+    
+    # 1. Predicted (Forecast)
+    plt.plot(forecast_df.index[fc_mask], forecast_df.loc[fc_mask, "occupancy_pred"], 
+             label="Predicted (Forecast)", color="green", linestyle="--", linewidth=1.5, alpha=0.8)
+             
+    # 2. Real (Simulation Result)
+    plt.plot(times[mask], df[mask]["occ"] * 180, 
+             label=f"Real ({label})", color="blue", linewidth=2)
+             
+    plt.title(f"Real vs Predicted Occupancy ({label})")
+    plt.xlabel("Time")
     plt.ylabel("Vehicles")
     plt.legend()
     plt.grid(True, alpha=0.3)
-
-    # 2. Price
-    plt.subplot(4, 1, 2)
-    plt.step(times[mask], df_d[mask]["price"], where="post", label="Price", color="red")
-    plt.ylabel("Price (€)")
-    plt.grid(True, alpha=0.3)
-
-    # 3. Traffic
-    plt.subplot(4, 1, 3)
-    plt.plot(times[mask], df_d[mask]["traffic"], label="Traffic", color="orange")
-    plt.ylabel("Traffic")
-    plt.grid(True, alpha=0.3)
-
-    # 4. Lost Customers
-    plt.subplot(4, 1, 4)
-    lost = df_d["base_entries"] - df_d["actual_entries"]
-    plt.bar(times[mask], lost[mask], label="Lost Customers", color="purple", width=0.003)
-    plt.ylabel("Declined (5 min)")
-    plt.grid(True, alpha=0.3)
-
+    
     plt.tight_layout()
     plt.savefig(f"reports/{filename}")
-    print(f"[Visual] PNG saved to reports/{filename}")
+    print(f"[Visual] Simplified PNG saved to reports/{filename}")
     plt.close()
 
+def save_comparison_plot_simple(log_1, log_2, forecast_df, filename="comparison_simple.png", 
+                                label_1="Classic", label_2="AI"):
+    """
+    Simplified Comparison Plot: Forecast vs Real 1 vs Real 2.
+    """
+    df_1 = pd.DataFrame(log_1)
+    df_2 = pd.DataFrame(log_2)
+    start_date = forecast_df.index[0]
+    times = start_date + pd.to_timedelta(df_1["t"], unit="m")
+    
+    plt.figure(figsize=(14, 7))
+    
+    limit = start_date + pd.to_timedelta(48, unit="h")
+    mask = times < limit
+    fc_mask = forecast_df.index < limit
+    
+    # Forecast
+    plt.plot(forecast_df.index[fc_mask], forecast_df.loc[fc_mask, "occupancy_pred"], 
+             label="Predicted Demand", color="green", linestyle=":", linewidth=2, alpha=0.6)
+    
+    # Real 1 (e.g. Classic)
+    plt.plot(times[mask], df_1[mask]["occ"] * 180, 
+             label=label_1, color="gray", linestyle="-", linewidth=1.5, alpha=0.7)
+             
+    # Real 2 (e.g. AI)
+    plt.plot(times[mask], df_2[mask]["occ"] * 180, 
+             label=label_2, color="blue", linewidth=2)
+    
+    plt.title(f"Performance Comparison: {label_1} vs {label_2}")
+    plt.ylabel("Vehicles")
+    plt.xlabel("Time")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(f"reports/{filename}")
+    print(f"[Visual] Simplified Comparison PNG saved to reports/{filename}")
+    plt.close()
+
+
 # ---------------------------------------------------------
-# TIMESTAMP SANITIZER
+# TWIN ANALYSIS HELPER
 # ---------------------------------------------------------
-def convert_timestamps(obj):
-    if isinstance(obj, dict):
-        return {k: convert_timestamps(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_timestamps(v) for v in obj]
-    elif hasattr(obj, "isoformat"):
-        return obj.isoformat()
-    return obj
+def run_twin_analysis(cfg, args, test_policy_type, forecaster_type, label_test, scenarios=None):
+    if scenarios is None:
+        scenarios = {"Base": 1.0, "2x_Demand": 2.0, "3x_Demand": 3.0}
+
+    lot_capacity = cfg["lots"][0]["capacity"]
+    
+    for sc_name, sc_mult in scenarios.items():
+        print(f"\n>>> Running Scenario: {sc_name} (Multiplier: {sc_mult}x)")
+        try: sys.stdout.flush() 
+        except: pass
+        
+        cfg["demand_multiplier"] = sc_mult
+        
+        # 1. Benchmark: STATIC
+        print(f"    [{sc_name}] Running Benchmark: STATIC (Env: {forecaster_type})...")
+        sim_s = OfflineDigitalTwinSimulator(cfg)
+        log_s, df_f = sim_s.run(make_policy("static"), forecaster_type=forecaster_type)
+        rev_s, price_s, occ_s, rej_s, served_s = calculate_metrics(log_s, capacity=lot_capacity)
+        
+        # 2. Test Policy
+        print(f"    [{sc_name}] Running Test: {label_test.upper()}...")
+        sim_d = OfflineDigitalTwinSimulator(cfg)
+        
+        # Configure Policy
+        policy = make_policy(test_policy_type)
+        if hasattr(policy, "target") and args.target is not None: policy.target = args.target
+        if hasattr(policy, "k") and args.k is not None: policy.k = args.k
+        
+        log_d, _ = sim_d.run(policy, forecaster_type=forecaster_type)
+        rev_d, price_d, occ_d, rej_d, served_d = calculate_metrics(log_d, capacity=lot_capacity)
+        
+        # Calculate Delta
+        if served_s > 0:
+             delta_demand_pct = ((served_d - served_s) / served_s) * 100.0
+        else:
+             delta_demand_pct = 0.0
+
+        print("\n" + "=" * 94)
+        print(f"SCENARIO: {sc_name:<10} | {'METRIC':<18} | {'STATIC':<10} | {label_test.upper():<12} | {'DELTA':<8}")
+        print("-" * 94)
+        print(f"{' ':24} | {'Revenue (€)':<18} | {rev_s:10.2f} | {rev_d:10.2f} | {rev_d - rev_s:+8.2f}")
+        print(f"{' ':24} | {'Avg Price (€)':<18} | {price_s:10.2f} | {price_d:10.2f} | {price_d - price_s:+8.2f}")
+        print(f"{' ':24} | {'Avg Occ (%)':<18} | {occ_s*100:10.1f} | {occ_d*100:10.1f} | {(occ_d - occ_s)*100:+8.1f}")
+        print(f"{' ':24} | {'Rejection (%)':<18} | {rej_s:10.1f} | {rej_d:10.1f} | {rej_d - rej_s:+8.1f}") 
+        print(f"{' ':24} | {'Demand Delta(%)':<18} | {'---':^10} | {delta_demand_pct:+10.1f} | {' ':>8}")
+        print("=" * 94 + "\n")
+        
+        suffix = f"_{label_test}_{sc_name}"
+        # GENERATE SIMPLE PLOT (Real vs Predicted)
+        # For this analysis, "Real" is the Test Policy Result.
+        save_simple_plot(log_d, df_f, filename=f"simple_plot{suffix}.png", label=label_test)
+        
+        save_csv_results(log_s, log_d, df_f, filename=f"comparison_data{suffix}.csv",
+                         label_1="Static", label_2=label_test)
 
 # ---------------------------------------------------------
 # MAIN EXECUTION ENTRY POINT
@@ -220,8 +236,8 @@ def convert_timestamps(obj):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--mode", type=int, choices=[1, 2], default=None,
-        help="1 = Normal Simulation, 2 = Offline Digital Twin"
+        "--mode", type=int, choices=[1, 2, 3], default=None,
+        help="1=Classic, 2=AI, 3=Battle(Classic vs AI)"
     )
     
     # --- ARGUMENTS FOR SCENARIO RUNNER ---
@@ -247,154 +263,113 @@ def main():
 
     # Determine Execution Mode
     mode = args.mode
+    
     if mode is None:
         if args.silent:
-            # Default to Twin mode if running silently without explicit mode
-            mode = 2
+            mode = 1
         else:
             print("\n================ Execution Mode ================")
-            print("1 - Normal Simulation")
-            print("2 - Offline Digital Twin (Traffic + Exit Friction)")
+            print("1 - Classic Analysis (Static vs Integral Control)")
+            print("2 - AI Analysis (Static vs MCTS/Chronos)")
+            print("3 - Battle Mode (Classic vs AI)")
             try:
-                choice = input("\nSelect (1 or 2): ").strip()
-                if choice not in ("1", "2"):
+                choice = input("\nSelect (1, 2 or 3): ").strip()
+                if choice not in ("1", "2", "3"):
                     mode = 1
                 else:
                     mode = int(choice)
             except:
                 mode = 1
 
+    # Apply overrides
+    if args.target is not None: cfg["policy"]["target_occupancy"] = args.target
+    if args.k is not None: cfg["policy"]["k"] = args.k
+    if args.p_min is not None: cfg["policy"]["p_min"] = args.p_min
+
     # ---------------------------------------------------------
-    # MODE 1 — Standard simulation
+    # MODE 1 — Classic Analysis
     # ---------------------------------------------------------
     if mode == 1:
         if not args.silent:
-            print("\n[MODE 1] Normal Simulation Selected\n")
+            print("\n[MODE 1] Classic Analysis: Static vs Integral Control (Balanced)\n")
         
-        policy_cfg = cfg.get("policy", {})
-        policy = make_policy(policy_cfg)
-
-        if hasattr(policy, "set_elasticities"):
-            policy.set_elasticities(cfg.get("elasticity", {}))
-        if hasattr(policy, "set_event_calendar"):
-            policy.set_event_calendar(cfg.get("event_calendar", []))
-
-        results = []
-        for r in range(cfg.get("runs", 1)):
-            seed = cfg.get("seed", 42) + r
-            out = run_once(cfg, policy, seed)
-            out["seed"] = seed
-            results.append(out)
-
-        pd.DataFrame(results).to_csv("reports/results_normal_sim.csv", index=False)
-        if not args.silent:
-            print("Saved normal simulation results.\n")
-        return
+        run_twin_analysis(cfg, args, 
+                          test_policy_type="dynpricing", 
+                          forecaster_type="statistical", 
+                          label_test="Classic")
 
     # ---------------------------------------------------------
-    # MODE 2 — Offline Digital Twin
+    # MODE 2 — AI Analysis
     # ---------------------------------------------------------
     elif mode == 2:
         if not args.silent:
-            print("\n[MODE 2] Offline Digital Twin - Traffic Aware\n")
+            print("\n[MODE 2] AI Analysis: Static vs MCTS Agent (Chronos)\n")
         
-        # --- UPDATE CONFIG WITH CLI ARGUMENTS ---
-        if "policy" not in cfg or isinstance(cfg["policy"], str):
-             old_val = cfg.get("policy", "dynpricing")
-             cfg["policy"] = {"type": old_val} if isinstance(old_val, str) else {}
+        run_twin_analysis(cfg, args, 
+                          test_policy_type="mcts", 
+                          forecaster_type="chronos", 
+                          label_test="AI")
 
-        # Apply overrides from Scenario Runner
-        if args.target is not None:
-            cfg["policy"]["target_occupancy"] = args.target
-        if args.k is not None:
-            cfg["policy"]["k"] = args.k
-        if args.p_min is not None:
-            cfg["policy"]["p_min"] = args.p_min
-        # ----------------------------------------
+    # ---------------------------------------------------------
+    # MODE 3 — Battle Mode (Classic vs AI)
+    # ---------------------------------------------------------
+    elif mode == 3:
+        if not args.silent:
+            print("\n[MODE 3] Battle Mode: Classic (Statistical) vs AI (Chronos + MCTS)\n")
 
-        # EXTRACT CAPACITY FROM CONFIG
         lot_capacity = cfg["lots"][0]["capacity"]
-
-        # ---------------------------------------------------------
-        # SCENARIO LOOP
-        # ---------------------------------------------------------
-        scenarios = {"Base": 1.0, "2x_Demand": 2.0, "3x_Demand": 3.0}
+        scenarios = {"3x_Demand": 3.0}
         
         for sc_name, sc_mult in scenarios.items():
             print(f"\n>>> Running Scenario: {sc_name} (Multiplier: {sc_mult}x)")
-            try:
-                sys.stdout.flush() # Force print to show up
+            try: sys.stdout.flush() 
             except: pass
             
-            # Update Config
             cfg["demand_multiplier"] = sc_mult
             
-            # Re-initialize Sim to ensure clean state
-            sim = OfflineDigitalTwinSimulator(cfg)
-
-            # 1. Benchmark: STATIC
-            if not args.silent: print(f"    [{sc_name}] Running Benchmark: STATIC...")
-            log_s, df_f = sim.run(make_policy("static"))
-            rev_s, price_s, occ_s, rej_s, served_s = calculate_metrics(log_s, capacity=lot_capacity)
+            # --- RUN 1: CLASSIC (Benchmark) ---
+            print(f"    [{sc_name}] Running Contender 1: CLASSIC (Using Chronos Env for Fairness)...")
+            sim_c = OfflineDigitalTwinSimulator(cfg)
+            pol_c = make_policy("balanced")
+            if args.target: pol_c.target = args.target
+            if args.k: pol_c.k = args.k
             
-            # 2. Benchmark: DYNAMIC (Proposal)
-            if not args.silent: print(f"    [{sc_name}] Running Proposal: DYNAMIC...")
+            # CRITICAL FIX: Use 'chronos' for environment generation so comparisons are fair
+            log_c, df_f_c = sim_c.run(pol_c, forecaster_type="chronos")
+            rev_c, price_c, occ_c, rej_c, served_c = calculate_metrics(log_c, capacity=lot_capacity)
             
-            # Instanciar a política correta
-            p_type = cfg["policy"].get("type", "dynpricing")
-            if p_type in ["dynamic", "linear"]: p_type = "dynpricing"
-            dyn_policy = make_policy(p_type)
-
-            # Atualizar os parâmetros
-            if "target_occupancy" in cfg["policy"]: dyn_policy.target = cfg["policy"]["target_occupancy"]
-            if "k" in cfg["policy"]: dyn_policy.k = cfg["policy"]["k"]
-            if "p_min" in cfg["policy"]: dyn_policy.p_min = cfg["policy"]["p_min"]
+            # --- RUN 2: AI (Challenger) ---
+            print(f"    [{sc_name}] Running Contender 2: AI (Chronos + MCTS)...")
+            sim_ai = OfflineDigitalTwinSimulator(cfg)
+            pol_ai = make_policy("mcts")
             
-            # Run simulation
-            log_d, _ = sim.run(dyn_policy)
-            rev_d, price_d, occ_d, rej_d, served_d = calculate_metrics(log_d, capacity=lot_capacity)
+            log_ai, df_f_ai = sim_ai.run(pol_ai, forecaster_type="chronos")
+            rev_ai, price_ai, occ_ai, rej_ai, served_ai = calculate_metrics(log_ai, capacity=lot_capacity)
             
-            # Calculate Delta (Dynamic vs Static served)
-            if served_s > 0:
-                 delta_demand_pct = ((served_d - served_s) / served_s) * 100.0
+             # Calculate Delta
+            if served_c > 0:
+                 delta_demand_pct = ((served_ai - served_c) / served_c) * 100.0
             else:
                  delta_demand_pct = 0.0
 
-            # 3. Output Handling
-            if args.silent:
-                # Append scenario name to JSON if needed, or just print multiple objects?
-                # For now let's print one JSON per scenario line
-                output_data = {
-                    "scenario": sc_name,
-                    "target": args.target if args.target is not None else cfg["policy"].get("target_occupancy", 0),
-                    "k": args.k if args.k is not None else cfg["policy"].get("k", 0),
-                    "p_min": args.p_min if args.p_min is not None else cfg["policy"].get("p_min", 0),
-                    "static_revenue": rev_s,
-                    "dynamic_revenue": rev_d,
-                    "dynamic_price": price_d,
-                    "dynamic_occ": occ_d,
-                    "rejection_pct": rej_d,
-                    "delta_demand_pct": delta_demand_pct
-                }
-                print(json.dumps(output_data))
-            else:
-                print("\n" + "=" * 80)
-                print(f"SCENARIO: {sc_name:<10} | {'METRIC':<18} | {'STATIC':<10} | {'DYNAMIC':<10} | {'DELTA':<8}")
-                print("-" * 80)
-                print(f"{' ':24} | {'Revenue (€)':<18} | {rev_s:10.2f} | {rev_d:10.2f} | {rev_d - rev_s:+8.2f}")
-                print(f"{' ':24} | {'Avg Price (€)':<18} | {price_s:10.2f} | {price_d:10.2f} | {price_d - price_s:+8.2f}")
-                print(f"{' ':24} | {'Avg Occ (%)':<18} | {occ_s*100:10.1f} | {occ_d*100:10.1f} | {(occ_d - occ_s)*100:+8.1f}")
-                print(f"{' ':24} | {'Rejection (%)':<18} | {rej_s:10.1f} | {rej_d:10.1f} | {rej_d - rej_s:+8.1f}") 
-                print(f"{' ':24} | {'Demand Delta(%)':<18} | {'---':^10} | {delta_demand_pct:+10.1f} | {' ':>8}")
-                print("=" * 80 + "\n")
-                try:
-                    sys.stdout.flush()
-                except: pass
-
-                suffix = f"_{sc_name}"
-                save_static_plot(log_s, log_d, df_f, filename=f"comparison_plot{suffix}.png")
-                save_interactive_plot(log_s, log_d, df_f, filename=f"comparison_interactive{suffix}.html")
-                save_csv_results(log_s, log_d, df_f, filename=f"comparison_data{suffix}.csv")
+            # Output
+            print("\n" + "=" * 94)
+            print(f"SCENARIO: {sc_name:<10} | {'METRIC':<18} | {'CLASSIC':<10} | {'AI':<12} | {'DELTA':<8}")
+            print("-" * 94)
+            print(f"{' ':24} | {'Revenue (€)':<18} | {rev_c:10.2f} | {rev_ai:10.2f} | {rev_ai - rev_c:+8.2f}")
+            print(f"{' ':24} | {'Avg Price (€)':<18} | {price_c:10.2f} | {price_ai:10.2f} | {price_ai - price_c:+8.2f}")
+            print(f"{' ':24} | {'Avg Occ (%)':<18} | {occ_c*100:10.1f} | {occ_ai*100:10.1f} | {(occ_ai - occ_c)*100:+8.1f}")
+            print(f"{' ':24} | {'Rejection (%)':<18} | {rej_c:10.1f} | {rej_ai:10.1f} | {rej_ai - rej_c:+8.1f}") 
+            print(f"{' ':24} | {'Demand Delta(%)':<18} | {'---':^10} | {delta_demand_pct:+10.1f} | {' ':>8}")
+            print("=" * 94 + "\n")
+            
+            suffix = f"_Battle_{sc_name}"
+            # Uses simplified comparison plot (Forecast vs Classic vs AI)
+            save_comparison_plot_simple(log_c, log_ai, df_f_ai, filename=f"comparison_simple{suffix}.png", 
+                             label_1="Classic", label_2="AI")
+            
+            save_csv_results(log_c, log_ai, df_f_ai, filename=f"comparison_data{suffix}.csv",
+                             label_1="Classic", label_2="AI")
 
 
 if __name__ == "__main__":

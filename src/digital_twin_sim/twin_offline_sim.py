@@ -136,12 +136,20 @@ class OfflineDigitalTwinSimulator:
             # ------------------------------------------------------
             # 1. READ BASE DEMAND (Occupancy & Flow)
             # ------------------------------------------------------
-            # We use the forecast directly. No internal scaling needed as OccupancyForecaster
-            # provides the correct absolute values.
-            base_occ = row["occupancy_pred"] * event_factor
+            # Data Interpretation:
+            # The dataset 'occupancy' is 0-100 (Percentage-like) but the simulation Lot has Capacity=180.
+            # If we treat '66' as 66 cars, we define a small demand relative to capacity (36%),
+            # forcing the controller to floor prices to reach 95% targets.
+            # FIX: We treat the input as APPROX PERCENTAGE of the Lot Capacity to normalize demand.
+            # Scale Factor = Capacity / 100.0
+            scale_factor = lot.capacity / 100.0 
             
-            # We still read flow for metrics, but it doesn't drive the state.
-            base_entries = row["entries_pred"] * event_factor 
+            raw_occ = row["occupancy_pred"]
+            raw_ent = row["entries_pred"]
+            
+            # Apply Event Factor (Uplift) + Scale Factor
+            base_occ = raw_occ * scale_factor * event_factor
+            base_entries = raw_ent * scale_factor * event_factor 
             
             current_traffic = row["traffic_pred"]
 
@@ -206,7 +214,7 @@ class OfflineDigitalTwinSimulator:
 
     
 
-    def run(self, policy_instance):
+    def run(self, policy_instance, forecaster_type="statistical"):
         import os  # Required for path correction
         print(f"[Twin] Initializing Full Digital Twin (Inputs/Exits Logic)...")
         
@@ -226,24 +234,31 @@ class OfflineDigitalTwinSimulator:
         stats.price_n[lot.name] = 0
 
         policy = policy_instance
-        # Inject config into policy if needed
-        for k, v in self.cfg.items():
-            if k not in ["lots", "policy", "elasticity"]: setattr(policy, k, v)
-        
-        if hasattr(policy, "schedule"):
-            env.process(policy.schedule(env, [lot], stats))
+
 
         try:
             from digital_twin_sim.occupancy_forecast import OccupancyForecaster
+            # Conditionally import Chronos
+            if forecaster_type == "chronos":
+                try:
+                    from digital_twin_sim.chronos_adapter import ChronosAdapter
+                except ImportError:
+                    print("[Error] Could not import ChronosAdapter. Falling back to Statistical.")
+                    forecaster_type = "statistical"
         except ImportError:
             from occupancy_forecast import OccupancyForecaster
+            if forecaster_type == "chronos":
+                try:
+                    from chronos_adapter import ChronosAdapter
+                except ImportError:
+                    forecaster_type = "statistical"
         
         train_start = self.cfg.get("twin_train_start", "2022-01-01")
         train_end   = self.cfg.get("twin_train_end", "2022-05-31")
         test_start  = self.cfg.get("twin_test_start", "2022-06-01")
         test_end    = self.cfg.get("twin_test_end", "2022-06-30")
         
-        print(f"[Twin] Training Forecast Model...")
+        print(f"[Twin] Training Forecast Model ({forecaster_type.upper()})...")
         # Check if user is using the LFS pointer file by mistake
         if "ME_2022_S1.csv" in self.cfg["dataset_path"]:
             print("[WARN] It seems you are using the LFS pointer file. Please use 'data/P023_sim/dataset_P023_simready_updated.csv'.")
@@ -268,12 +283,21 @@ class OfflineDigitalTwinSimulator:
                      (df_full['date_obj'] <= pd.to_datetime(train_end))
         df_train = df_full[mask_train]
         
-        forecaster = OccupancyForecaster()
+        if forecaster_type == "chronos":
+            forecaster = ChronosAdapter()
+        else:
+            forecaster = OccupancyForecaster()
+        
         forecaster.fit(df_train)
         self.traffic_avg_ref = forecaster.traffic_base_avg
         
         print(f"[Twin] Generating Forecast...")
-        df_forecast = forecaster.predict(test_start, test_end, stochastic=True)
+        if forecaster_type == "chronos":
+            # For Chronos, we pass the full dataframe (Ground Truth) to enable Rolling Forecast
+            # The adapter will use this to "reveal" data hour-by-hour
+            df_forecast = forecaster.predict(test_start, test_end, stochastic=True, ground_truth_df=df_full)
+        else:
+            df_forecast = forecaster.predict(test_start, test_end, stochastic=True)
 
         # Apply Demand Multiplier (Scenario Testing)
         demand_mult = self.cfg.get("demand_multiplier", 1.0)
@@ -297,6 +321,16 @@ class OfflineDigitalTwinSimulator:
         
         base_price = lot.price 
         elasticity_cfg = self.cfg.get("elasticity", {})
+
+        # Inject config into policy if needed
+        for k, v in self.cfg.items():
+            if k not in ["lots", "policy", "elasticity"]: setattr(policy, k, v)
+        
+        if hasattr(policy, "set_forecast"):
+            policy.set_forecast(df_forecast)
+
+        if hasattr(policy, "schedule"):
+            env.process(policy.schedule(env, [lot], stats))
         
         # Extract event calendar from config
         events_cfg = self.cfg.get("event_calendar", [])

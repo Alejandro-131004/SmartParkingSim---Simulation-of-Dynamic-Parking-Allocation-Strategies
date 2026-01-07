@@ -36,7 +36,7 @@ class BalancedCost:
 
 # ---------- DynamicPricingBalanced ----------
 class DynamicPricingBalanced:
-    def __init__(self, alpha=0.1, beta=2.5, target=0.8, k=1.0,
+    def __init__(self, alpha=0.1, beta=2.5, target=0.95, k=1.0,
                  p_min=0.0, p_max=50.0, interval=15, max_wait_min=10):
         self.alpha, self.beta = alpha, beta
         self.target, self.k = target, k
@@ -175,6 +175,57 @@ class StaticPricing(DynamicPricingBalanced):
         # Do nothing. Wait forever. Prices stay at initial config.
         yield env.timeout(float('inf'))
 
+# ---------- MCTSPricing ----------
+class MCTSPricing:
+    """
+    Uses Monte Carlo Tree Search to plan pricing 1-hour ahead.
+    """
+    def __init__(self, interval=15, p_min=0.0, p_max=50.0):
+        self.interval = interval
+        self.p_min = p_min
+        self.p_max = p_max
+        self.agent = None # Initialized when schedule starts (needs forecast)
+        
+    def set_forecast(self, df_forecast):
+        from mcts_agent import MCTSAgent
+        # Initialize the AI Agent with the Forecast (World Model)
+        self.agent = MCTSAgent(forecast_df=df_forecast, planning_horizon=60, n_simulations=50)
+
+    def choose(self, lots, now):
+        # FCFS fallback for allocation
+        return sorted(lots, key=lambda L: (L.price, L.distance))[0] if lots else None
+
+    def pay(self, lot, payment): return lot.price
+
+    def schedule(self, env, lots, stats):
+        if self.agent is None:
+            print("[WARN] MCTS Policy started without Forecast Data. Pricing will be static.")
+            yield env.timeout(float('inf'))
+            
+        while True:
+            for L in lots:
+                # 1. Capture State
+                current_state = {
+                    't': int(env.now),
+                    'occ': L.res.count,
+                    'price': L.price
+                }
+                
+                # 2. Ask AI for Action
+                # Agent returns price DELTA (e.g. +0.25)
+                price_delta = self.agent.get_action(current_state)
+                
+                new_price = L.price + price_delta
+                final_price = max(self.p_min, min(self.p_max, new_price))
+                
+                # 3. Apply
+                L.price = final_price
+                stats.price_sum[L.name] += L.price
+                stats.price_n[L.name] += 1
+                
+            yield env.timeout(self.interval)
+
+
 # ---------- Factory ----------
 def make_policy(name):
     # Handle dict config case
@@ -186,12 +237,17 @@ def make_policy(name):
                 k=float(name.get("k", 5.0)),
                 p_min=float(name.get("p_min", 0.0))
             )
+        if p_type == "mcts":
+             return MCTSPricing(
+                 p_min=float(name.get("p_min", 0.0))
+             )
         name = p_type
 
     if name == "fcfs": return FCFS()
     if name == "balanced": return BalancedCost()
     if name == "dynpricing": return DynamicPricingBalanced()
     if name == "static": return StaticPricing()
+    if name == "mcts": return MCTSPricing()
     raise ValueError(f"Unknown policy: {name}")
 
 # ---------- Probabilistic selector ----------
