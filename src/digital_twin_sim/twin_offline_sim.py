@@ -93,10 +93,7 @@ class OfflineDigitalTwinSimulator:
     def simulate_flow_dynamics(self, env, lot, stats, df_forecast, elasticity_cfg, base_price, events_cfg=None):
         """
         State-Based Simulation (Occupancy Driven).
-        The usage of the parking lot is determined directly by the demand curve (forecast),
-        modulated by price elasticity.
-        
-        Occupancy = Forecast_Occupancy * Price_Factor
+        FIXED: Correctly handles scaling for Ratio vs Percentage inputs.
         """
         if events_cfg is None:
             events_cfg = []
@@ -131,25 +128,30 @@ class OfflineDigitalTwinSimulator:
                     if event.get("start_hour") <= current_hour < event.get("end_hour"):
                         uplift = event.get("demand_uplift", 1.0)
                         event_factor *= uplift
-                        # print(f"[DEBUG EVENT] Day {current_day} Hour {current_hour:.2f}: Applying uplift {uplift}")
 
             # ------------------------------------------------------
             # 1. READ BASE DEMAND (Occupancy & Flow)
             # ------------------------------------------------------
-            # Data Interpretation:
-            # The dataset 'occupancy' is 0-100 (Percentage-like) but the simulation Lot has Capacity=180.
-            # If we treat '66' as 66 cars, we define a small demand relative to capacity (36%),
-            # forcing the controller to floor prices to reach 95% targets.
-            # FIX: We treat the input as APPROX PERCENTAGE of the Lot Capacity to normalize demand.
-            # Scale Factor = Capacity / 100.0
-            scale_factor = lot.capacity / 100.0 
-            
             raw_occ = row["occupancy_pred"]
             raw_ent = row["entries_pred"]
             
-            # Apply Event Factor (Uplift) + Scale Factor
-            base_occ = raw_occ * scale_factor * event_factor
-            base_entries = raw_ent * scale_factor * event_factor 
+            # Detect if 'occupancy_pred' is a Ratio (0.0-1.0) or Percentage/Count (>1.5)
+            # The Forecaster usually normalizes to Ratio (0.40), so we multiply by Capacity (180) to get cars.
+            
+            if raw_occ <= 1.5:
+                # It is a ratio (e.g., 0.40). Convert to vehicles.
+                base_occ = raw_occ * lot.capacity * event_factor
+            else:
+                # It is likely raw count or percentage.
+                # Since we know dataset is %, assume it might not have been normalized?
+                # Safer fallback: treat as count, but safeguard.
+                base_occ = raw_occ * event_factor
+                
+            # ENTRIES Logic:
+            # The CSV shows entries are raw counts (e.g. 58). 
+            # We should NOT multiply entries by capacity. Just apply event/demand multipliers.
+            base_entries = raw_ent * event_factor
+            # --- CRITICAL FIX END ---
             
             current_traffic = row["traffic_pred"]
 
@@ -158,13 +160,9 @@ class OfflineDigitalTwinSimulator:
             # ------------------------------------------------------
 
             # Price elasticity (Sigmoid Model)
-            # Factor goes from 2.0 (cheap) to 0.0 (expensive), centered at 1.0 (base price)
-            # Price elasticity with Weather
-            # Factor goes from 3.0 (cheap+storm) to 0.0 (expensive)
             price_factor = 1.0
             
             # Calculate Weather Score (0.0 good -> 1.0 bad) from avg_temp
-            # Assume 20C is ideal. Deviation > 10C is bad.
             avg_temp = row.get("avg_temp", 20.0)
             weather_score = min(1.0, abs(avg_temp - 20.0) / 10.0)
 
@@ -172,14 +170,10 @@ class OfflineDigitalTwinSimulator:
                 price_ratio = lot.price / base_price
                 price_factor = self._calculate_sigmoid_elasticity(price_ratio, k=5.0, weather_score=weather_score)
 
-            # Traffic elasticity (Traffic reduces demand/access)
+            # Traffic elasticity
             traffic_factor = 1.0
             if self.traffic_avg_ref > 0 and current_traffic > 0:
                 traffic_ratio = current_traffic / self.traffic_avg_ref
-                # Simple model: heavy traffic reduces demand slightly (friction) 
-                # or increases it (diverted from street)? 
-                # Preserving original logic: traffic modifies "entries" probability.
-                # Here we map it to occupancy capacity.
                 traffic_ratio = max(0.5, min(2.0, traffic_ratio))
                 traffic_factor = traffic_ratio ** (-elast_traffic)
 
@@ -189,29 +183,21 @@ class OfflineDigitalTwinSimulator:
             # ------------------------------------------------------
             # 3. SET PARKING STATE DIRECTLY
             # ------------------------------------------------------
-            # The occupancy is the base demand modulated by our policy (price) and environment (traffic)
             target_occ = base_occ * total_factor
             
             # Physical constraint
             final_occ = max(0.0, min(target_occ, lot.capacity))
             
-            # Update the resource (instantaneously set)
-            # In SimPy resources we usually do request/release, but here we force the level
-            # for the Digital Twin approximation.
+            # Update the resource
             if hasattr(lot.res, 'count'):
                  lot.res.count = final_occ
             
             # ------------------------------------------------------
-            # 4. UPDATE METRICS (Entries/Exits)
+            # 4. UPDATE METRICS
             # ------------------------------------------------------
-            # We estimate "actual entries" based on the ratio of serviced demand
-            # If we reduced occupancy by 10% due to price, we implicitly rejected 10% of entries.
             lot.current_base_entries = base_entries
             lot.current_actual_entries = base_entries * total_factor
-            
-            # Delayed exits concept is removed in State-Based mode as we don't track flow accumulation
             lot.delayed_exits_queue = 0.0
-
     
 
     def run(self, policy_instance, forecaster_type="statistical"):

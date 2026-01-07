@@ -1,4 +1,5 @@
 import math, random
+import numpy as np
 
 # ---------- Base helpers ----------
 def load(L):
@@ -36,8 +37,8 @@ class BalancedCost:
 
 # ---------- DynamicPricingBalanced ----------
 class DynamicPricingBalanced:
-    def __init__(self, alpha=0.1, beta=2.5, target=0.95, k=1.0,
-                 p_min=0.0, p_max=50.0, interval=15, max_wait_min=10):
+    def __init__(self, alpha=0.1, beta=2.5, target=0.8, k=1.0,
+                 p_min=0.0, p_max=5.0, interval=15, max_wait_min=10):
         self.alpha, self.beta = alpha, beta
         self.target, self.k = target, k
         self.p_min, self.p_max = p_min, p_max
@@ -46,7 +47,6 @@ class DynamicPricingBalanced:
         self.elasticities = {}
         self.event_calendar = []
         
-        # Stability / Revenue Tracking
         self.last_price = {}
         self.last_revenue = {}
 
@@ -61,102 +61,62 @@ class DynamicPricingBalanced:
     def _occ(self, L):
         return L.res.count / max(1, L.capacity)
 
-    def _event_modifier(self, now, lot_name):
-        for e in self.event_calendar:
-            day_start = e["day"] * 1440
-            if day_start <= now < day_start + 1440 and e["lot"] == lot_name:
-                hour = (now % 1440) / 60.0
-                if e["start_hour"] <= hour < e["end_hour"]:
-                    return e.get("demand_uplift", 1.0), e.get("price_multiplier", 1.0)
-        return 1.0, 1.0
-
     def choose(self, lots, now):
         if not lots: return None
         e = self.elasticities or {"price": 1.0, "distance": 1.0, "occupancy": 1.0}
+        
+        # Simple event check for uplift (simplified)
+        uplift = 1.0
+        for ev in self.event_calendar:
+            day_start = ev["day"] * 1440
+            if day_start <= now < day_start + 1440:
+                hour = (now % 1440) / 60.0
+                if ev["start_hour"] <= hour < ev["end_hour"]:
+                    uplift = ev.get("demand_uplift", 1.0)
+
         def cost(L):
-            uplift, _ = self._event_modifier(now, L.name)
             return (e["price"] * L.price + e["distance"] * L.distance + e["occupancy"] * self._occ(L)) / uplift
         return min(lots, key=cost)
 
     def pay(self, lot, payment): return lot.price
 
     def schedule(self, env, lots, stats):
-        # Initialize tracking for existing lots
         for L in lots:
             self.last_price[L.name] = L.price
-            # Initial estimate or 0
             self.last_revenue[L.name] = (L.res.count / max(1, L.capacity)) * L.capacity * L.price
 
         while True:
             for L in lots:
-                # ---------------------------------------------------------
-                # 0. Measure Current State (Result of previous interval)
-                # ---------------------------------------------------------
-                current_occ_count = L.res.count
                 current_price = L.price
-                # Revenue Rate = Occupancy * Price
-                current_revenue = current_occ_count * current_price
                 
-                prev_price = self.last_price.get(L.name, current_price)
-                prev_revenue = self.last_revenue.get(L.name, current_revenue)
-                
-                # 1. Forecast Occupancy (For control error)
+                # 1. Forecast Occupancy
                 forecast_occ = predict_future_occupancy(L, horizon=60)
                 
-                # ---------------------------------------------------------
-                # 2. PROFIT GUARDRAIL CHECK
-                # ---------------------------------------------------------
-                # Logic: If we raised price, but revenue dropped significantly, 
-                # then we passed the saturation point. Revert/Cut.
-                
-                guard_triggered = False
-                revenue_drop_threshold = 0.95 # 5% drop tolerance
-                
-                # Check if price was increased recently (compare current to prev)
-                # Note: 'L.price' is the one we set in the LAST iteration.
-                if current_price > prev_price:
-                    # We are in a price hike cycle. Did it work?
-                    if current_revenue < prev_revenue * revenue_drop_threshold:
-                        # BAD outcome: Price Up -> Revenue Down.
-                        # Action: Cut price to recover demand.
-                        # Revert to previous price or usually slightly lower to regain trust/momentum
-                        # print(f"[Guard] {L.name}: Price hiked {prev_price:.2f}->{current_price:.2f} but Revenue fell {prev_revenue:.2f}->{current_revenue:.2f}. Cutting.")
-                        new_price_target = prev_price * 0.9 # Hard cut
-                        guard_triggered = True
-                
-                # ---------------------------------------------------------
-                # 3. Integral Control (Normal Operation)
-                # ---------------------------------------------------------
-                if not guard_triggered:
-                    # Standard I-Controller
+                # 2. Logic: Revenue Protection & Low Demand Guardrail
+                # If demand is VERY low (< 30%), lowering price is useless (waste of margin).
+                # We should actually hold or slightly increase to capture value from the few absolute need parkers.
+                if forecast_occ < 0.30:
+                    # Low Demand Mode: Don't drop price. 
+                    # If we are below 50% of max price, nudge it up slightly to recover margins.
+                    if current_price < (self.p_max * 0.5):
+                        price_change = 0.05
+                    else:
+                        price_change = 0.0
+                else:
+                    # Normal PID Control
                     error = forecast_occ - self.target
+                    # Standard Integral Control
+                    # If error is positive (Forecast > Target), we are too full -> Raise Price
+                    # If error is negative (Forecast < Target), we are empty -> Lower Price
                     price_change = error * self.k
                     
-                    # Add damping to prevent oscillation? 
-                    # For now keep simple Integral
-                    new_price_target = current_price + price_change
+                    # Clamp change speed (Stability)
+                    price_change = max(-0.5, min(0.5, price_change))
 
-                # 4. Event Multiplier (Simplified application)
-                multiplier = 1.0
-                for e in self.event_calendar:
-                    day_start = e["day"] * 1440
-                    if day_start <= env.now < day_start + 1440 and e["lot"] == L.name:
-                        hour = (env.now % 1440) / 60.0
-                        if e["start_hour"] <= hour < e["end_hour"]:
-                            multiplier *= e.get("price_multiplier", 1.0)
+                new_price_target = current_price + price_change
                 
-                new_price_target *= multiplier
-                
-                # 5. Smooth Update? 
-                # If Guard triggered, we want immediate impact. 
-                # If Normal, maybe smooth?
-                # Let's apply direct update to avoid "lag" fighting the guard.
-                
+                # 3. Hard Limits
                 final_price = max(self.p_min, min(self.p_max, new_price_target))
-                
-                # Update State
-                self.last_price[L.name] = final_price # Store what we are setting NOW for NEXT check
-                self.last_revenue[L.name] = current_revenue # Store result of OLD price
                 
                 L.price = final_price
                 stats.price_sum[L.name] += L.price
@@ -168,31 +128,33 @@ class DynamicPricingBalanced:
 class StaticPricing(DynamicPricingBalanced):
     """
     Static Pricing Policy.
-    - Uses the same driver choice logic (elasticities) as Dynamic.
-    - BUT prices NEVER change (schedule is disabled).
     """
     def schedule(self, env, lots, stats):
-        # Do nothing. Wait forever. Prices stay at initial config.
         yield env.timeout(float('inf'))
 
 # ---------- MCTSPricing ----------
 class MCTSPricing:
     """
-    Uses Monte Carlo Tree Search to plan pricing 1-hour ahead.
+    Uses Monte Carlo Tree Search to plan pricing.
     """
-    def __init__(self, interval=15, p_min=0.0, p_max=50.0):
+    def __init__(self, interval=15, p_min=0.0, p_max=5.0):
         self.interval = interval
         self.p_min = p_min
         self.p_max = p_max
-        self.agent = None # Initialized when schedule starts (needs forecast)
+        self.agent = None 
         
     def set_forecast(self, df_forecast):
         from mcts_agent import MCTSAgent
-        # Initialize the AI Agent with the Forecast (World Model)
-        self.agent = MCTSAgent(forecast_df=df_forecast, planning_horizon=60, n_simulations=50)
+        # FIX: Injecting the correct constraints into the Agent
+        self.agent = MCTSAgent(
+            forecast_df=df_forecast, 
+            planning_horizon=60, 
+            n_simulations=100, 
+            p_min=self.p_min,
+            p_max=self.p_max
+        )
 
     def choose(self, lots, now):
-        # FCFS fallback for allocation
         return sorted(lots, key=lambda L: (L.price, L.distance))[0] if lots else None
 
     def pay(self, lot, payment): return lot.price
@@ -204,27 +166,23 @@ class MCTSPricing:
             
         while True:
             for L in lots:
-                # 1. Capture State
                 current_state = {
                     't': int(env.now),
                     'occ': L.res.count,
                     'price': L.price
                 }
                 
-                # 2. Ask AI for Action
-                # Agent returns price DELTA (e.g. +0.25)
+                # Agent returns price DELTA
                 price_delta = self.agent.get_action(current_state)
                 
                 new_price = L.price + price_delta
                 final_price = max(self.p_min, min(self.p_max, new_price))
                 
-                # 3. Apply
                 L.price = final_price
                 stats.price_sum[L.name] += L.price
                 stats.price_n[L.name] += 1
                 
             yield env.timeout(self.interval)
-
 
 # ---------- Factory ----------
 def make_policy(name):
@@ -234,7 +192,7 @@ def make_policy(name):
         if p_type == "dynpricing":
             return DynamicPricingBalanced(
                 target=float(name.get("target_occupancy", 0.8)),
-                k=float(name.get("k", 5.0)),
+                k=float(name.get("k", 1.0)),
                 p_min=float(name.get("p_min", 0.0))
             )
         if p_type == "mcts":
