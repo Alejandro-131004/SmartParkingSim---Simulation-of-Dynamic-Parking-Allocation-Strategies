@@ -81,42 +81,63 @@ class DynamicPricingBalanced:
     def pay(self, lot, payment): return lot.price
 
     def schedule(self, env, lots, stats):
+        # Initialize tracking for existing lots
         for L in lots:
             self.last_price[L.name] = L.price
             self.last_revenue[L.name] = (L.res.count / max(1, L.capacity)) * L.capacity * L.price
 
         while True:
             for L in lots:
+                # ---------------------------------------------------------
+                # 0. Measure Current State
+                # ---------------------------------------------------------
+                current_occ_count = L.res.count
                 current_price = L.price
+                current_revenue = current_occ_count * current_price
+                
+                prev_price = self.last_price.get(L.name, current_price)
+                prev_revenue = self.last_revenue.get(L.name, current_revenue)
                 
                 # 1. Forecast Occupancy
                 forecast_occ = predict_future_occupancy(L, horizon=60)
                 
-                # 2. Logic: Revenue Protection & Low Demand Guardrail
-                # If demand is VERY low (< 30%), lowering price is useless (waste of margin).
-                # We should actually hold or slightly increase to capture value from the few absolute need parkers.
-                if forecast_occ < 0.30:
-                    # Low Demand Mode: Don't drop price. 
-                    # If we are below 50% of max price, nudge it up slightly to recover margins.
-                    if current_price < (self.p_max * 0.5):
-                        price_change = 0.05
-                    else:
-                        price_change = 0.0
-                else:
-                    # Normal PID Control
-                    error = forecast_occ - self.target
-                    # Standard Integral Control
-                    # If error is positive (Forecast > Target), we are too full -> Raise Price
-                    # If error is negative (Forecast < Target), we are empty -> Lower Price
-                    price_change = error * self.k
-                    
-                    # Clamp change speed (Stability)
-                    price_change = max(-0.5, min(0.5, price_change))
-
-                new_price_target = current_price + price_change
+                # ---------------------------------------------------------
+                # 2. REVENUE GUARDRAIL CHECK (O que faltava no teu código)
+                # ---------------------------------------------------------
+                # Logic: If we raised price, but revenue dropped, revert immediately.
+                guard_triggered = False
+                revenue_drop_threshold = 0.95 
                 
-                # 3. Hard Limits
+                if current_price > prev_price:
+                    if current_revenue < prev_revenue * revenue_drop_threshold:
+                        # BAD outcome: Price Up -> Revenue Down. Revert!
+                        new_price_target = prev_price * 0.9 
+                        guard_triggered = True
+                
+                # ---------------------------------------------------------
+                # 3. Integral Control with Low Demand Guardrail
+                # ---------------------------------------------------------
+                if not guard_triggered:
+                    # Guardrail 1: Low Demand (< 30%) -> Block price drops
+                    if forecast_occ < 0.30:
+                        if current_price < (self.p_max * 0.5):
+                            price_change = 0.05
+                        else:
+                            price_change = 0.0
+                    else:
+                        # Normal PID Control
+                        error = forecast_occ - self.target
+                        price_change = error * self.k
+                        price_change = max(-0.5, min(0.5, price_change))
+
+                    new_price_target = current_price + price_change
+
+                # 4. Final Updates
                 final_price = max(self.p_min, min(self.p_max, new_price_target))
+                
+                # Store state for next comparison
+                self.last_price[L.name] = final_price 
+                self.last_revenue[L.name] = current_revenue 
                 
                 L.price = final_price
                 stats.price_sum[L.name] += L.price

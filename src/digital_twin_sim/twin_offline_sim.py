@@ -168,7 +168,7 @@ class OfflineDigitalTwinSimulator:
 
             if base_price > 0:
                 price_ratio = lot.price / base_price
-                price_factor = self._calculate_sigmoid_elasticity(price_ratio, k=5.0, weather_score=weather_score)
+                price_factor = self._calculate_sigmoid_elasticity(price_ratio, k=2.0, weather_score=weather_score)
 
             # Traffic elasticity
             traffic_factor = 1.0
