@@ -9,9 +9,15 @@ class Forecaster:
     Replaces historical average with a token-based deep learning approach.
     """
     
-    def __init__(self, dataset_path, model_name="amazon/chronos-t5-small"):
+    def __init__(self, dataset_path=None, df=None, model_name="amazon/chronos-t5-small"):
         self.dataset_path = dataset_path
-        self.df = pd.read_csv(dataset_path)
+        
+        if df is not None:
+            self.df = df.copy()
+        elif dataset_path:
+            self.df = pd.read_csv(dataset_path)
+        else:
+            raise ValueError("Must provide either dataset_path or df")
         
         # Standardize columns
         self.df.columns = self.df.columns.str.lower().str.strip()
