@@ -2,6 +2,7 @@ import yaml
 import os
 import argparse
 import sys
+import pandas as pd
 
 # ---------------------------------------------------------
 # PATH CONFIGURATION
@@ -197,64 +198,106 @@ def main():
         if args.k is not None:      yaml_k = args.k
         if args.p_min is not None:  yaml_pmin = args.p_min
         
+        import traceback
         for sc_name, sc_mult in scenarios.items():
             print(f"\n>>> Running Scenario: {sc_name} (Multiplier: {sc_mult}x)")
-            try: sys.stdout.flush() 
+            try: 
+                sys.stdout.flush() 
             except: pass
             
             cfg["demand_multiplier"] = sc_mult
             
-            # --- RUN 1: CLASSIC (Benchmark) ---
-            print(f"    [{sc_name}] Running Contender 1: CLASSIC (Using Chronos Env for Fairness)...")
-            sim_c = OfflineDigitalTwinSimulator(cfg)
-            pol_c = make_policy("dynpricing")
+            results_log = [] # Store summary for table
             
-            # INJECT CONFIG
-            pol_c.target = yaml_target
-            pol_c.k = yaml_k
-            pol_c.p_min = yaml_pmin
-            pol_c.p_max = yaml_pmax
+            # DEFINE 4 CONTENDERS
+            contenders = [
+                {"name": "Classic_Stat",    "policy": "dynpricing", "forecast": "statistical"},
+                {"name": "Classic_Chronos", "policy": "dynpricing", "forecast": "chronos"},
+                {"name": "MCTS_Stat",       "policy": "mcts",       "forecast": "statistical"},
+                {"name": "MCTS_Chronos",    "policy": "mcts",       "forecast": "chronos"},
+            ]
             
-            # CRITICAL: Use 'chronos' for environment generation so comparisons are fair
-            log_c, df_f_c = sim_c.run(pol_c, forecaster_type="chronos")
-            rev_c, price_c, occ_c, rej_c, served_c = calculate_metrics(log_c, capacity=lot_capacity)
+            logs = {}
+            dfs_forecast = {}
             
-            # --- RUN 2: AI (Challenger) ---
-            print(f"    [{sc_name}] Running Contender 2: AI (Chronos + MCTS)...")
-            sim_ai = OfflineDigitalTwinSimulator(cfg)
-            pol_ai = make_policy("mcts")
-            
-            # INJECT CONFIG INTO AI AGENT
-            pol_ai.p_min = yaml_pmin
-            pol_ai.p_max = yaml_pmax
-            
-            log_ai, df_f_ai = sim_ai.run(pol_ai, forecaster_type="chronos")
-            rev_ai, price_ai, occ_ai, rej_ai, served_ai = calculate_metrics(log_ai, capacity=lot_capacity)
-            
-             # Calculate Delta
-            if served_c > 0:
-                 delta_demand_pct = ((served_ai - served_c) / served_c) * 100.0
-            else:
-                 delta_demand_pct = 0.0
+            for contender in contenders:
+                c_name = contender["name"]
+                c_pol_type = contender["policy"]
+                c_forc_type = contender["forecast"]
+                
+                print(f"    [{sc_name}] Running {c_name} ({c_pol_type} + {c_forc_type})...")
+                sim = OfflineDigitalTwinSimulator(cfg)
+                pol = make_policy(c_pol_type)
+                
+                # Config Injection
+                pol.p_min = yaml_pmin
+                pol.p_max = yaml_pmax
+                if c_pol_type == "dynpricing":
+                    pol.target = yaml_target
+                    pol.k = yaml_k
+                
+                # Run Simulation
+                log, df_f = sim.run(pol, forecaster_type=c_forc_type)
+                
+                # Calculate Metrics
+                rev, price, occ, rej, served = calculate_metrics(log, capacity=lot_capacity)
+                
+                logs[c_name] = log
+                dfs_forecast[c_name] = df_f
+                
+                results_log.append({
+                    "Scenario": sc_name,
+                    "Name": c_name,
+                    "Policy": c_pol_type,
+                    "Forecast": c_forc_type,
+                    "Revenue": rev,
+                    "Avg_Price": price,
+                    "Avg_Occ_Pct": occ * 100,
+                    "Rejection_Pct": rej
+                })
 
-            # Output
-            print("\n" + "=" * 94)
-            print(f"SCENARIO: {sc_name:<10} | {'METRIC':<18} | {'CLASSIC':<10} | {'AI':<12} | {'DELTA':<8}")
-            print("-" * 94)
-            print(f"{' ':24} | {'Revenue (€)':<18} | {rev_c:10.2f} | {rev_ai:10.2f} | {rev_ai - rev_c:+8.2f}")
-            print(f"{' ':24} | {'Avg Price (€)':<18} | {price_c:10.2f} | {price_ai:10.2f} | {price_ai - price_c:+8.2f}")
-            print(f"{' ':24} | {'Avg Occ (%)':<18} | {occ_c*100:10.1f} | {occ_ai*100:10.1f} | {(occ_ai - occ_c)*100:+8.1f}")
-            print(f"{' ':24} | {'Rejection (%)':<18} | {rej_c:10.1f} | {rej_ai:10.1f} | {rej_ai - rej_c:+8.1f}") 
-            print(f"{' ':24} | {'Demand Delta(%)':<18} | {'---':^10} | {delta_demand_pct:+10.1f} | {' ':>8}")
-            print("=" * 94 + "\n")
+            # Output Table
+            print("\n" + "=" * 100)
+            print(f"GRAND BATTLE REPORT: {sc_name}")
+            print("-" * 100)
+            print(f"{'Name':<20} | {'Policy':<10} | {'Forecast':<12} | {'Revenue (€)':<12} | {'Price (€)':<10} | {'Occ (%)':<8}")
+            print("-" * 100)
+            for res in results_log:
+                print(f"{res['Name']:<20} | {res['Policy']:<10} | {res['Forecast']:<12} | {res['Revenue']:12.0f} | {res['Avg_Price']:10.2f} | {res['Avg_Occ_Pct']:8.1f}")
+            print("=" * 100 + "\n")
             
-            suffix = f"_Battle_{sc_name}"
-            # Uses simplified comparison plot (Forecast vs Classic vs AI)
-            save_comparison_plot_simple(log_c, log_ai, df_f_ai, filename=f"comparison_simple{suffix}.png", 
-                             label_1="Classic", label_2="AI")
+            suffix = f"_GrandBattle_{sc_name}"
             
-            save_csv_results(log_c, log_ai, df_f_ai, filename=f"comparison_data{suffix}.csv",
-                             label_1="Classic", label_2="AI")
+            # Save CSV (Consolidated)
+            
+            # Base Time Index (use first one)
+            first_key = list(logs.keys())[0]
+            start_date = dfs_forecast[first_key].index[0]
+            base_log = logs[first_key]
+            
+            df_export = pd.DataFrame()
+            df_export["datetime"] = start_date + pd.to_timedelta(pd.DataFrame(base_log)["t"], unit="m")
+            
+            for name, log_data in logs.items():
+                df_l = pd.DataFrame(log_data)
+                df_export[f"{name}_occ"] = df_l["occ"] * 180
+                df_export[f"{name}_price"] = df_l["price"]
+            
+            # Save Forecasts (Stat and Chronos)
+            if "MCTS_Chronos" in dfs_forecast:
+                df_fc = dfs_forecast["MCTS_Chronos"]
+                if not isinstance(df_fc.index, pd.DatetimeIndex): df_fc.index = pd.to_datetime(df_fc.index)
+                df_export["Forecast_Chronos"] = df_export["datetime"].map(df_fc["occupancy_pred"])
+                
+            if "Classic_Stat" in dfs_forecast:
+                df_fs = dfs_forecast["Classic_Stat"]
+                if not isinstance(df_fs.index, pd.DatetimeIndex): df_fs.index = pd.to_datetime(df_fs.index)
+                df_export["Forecast_Stat"] = df_export["datetime"].map(df_fs["occupancy_pred"])
+                
+            os.makedirs("reports", exist_ok=True)
+            export_path = f"reports/comparison_data{suffix}.csv"
+            df_export.to_csv(export_path, index=False)
+            print(f"[Data] Grand Battle CSV exported to {export_path}")
 
 
 if __name__ == "__main__":

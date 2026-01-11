@@ -56,11 +56,21 @@ def save_csv_results(static_log, dynamic_log, forecast_df, filename="comparison_
     
     df_comb["base_entries"] = df_d["base_entries"].values
     df_comb["actual_entries"] = df_d["actual_entries"].values
-    df_comb["lost_entries_step"] = df_comb["base_entries"] - df_comb["actual_entries"]
+    # Save Forecast (Raw)
+    # Robust Mapping by Datetime
+    # Ensure forecast index is datetime
+    if not isinstance(forecast_df.index, pd.DatetimeIndex):
+        forecast_df.index = pd.to_datetime(forecast_df.index)
+        
+    # Map values
+    df_comb["forecast_raw"] = df_comb["datetime"].map(forecast_df["occupancy_pred"])
+    
+    # Fill NaN if any (e.g. slight time mismatch)
+    # df_comb["forecast_raw"] = df_comb["forecast_raw"].fillna(0) # Optional
     
     os.makedirs("reports", exist_ok=True)
     df_comb.to_csv(f"reports/{filename}", index=False)
-    print(f"[Data] CSV exported to reports/{filename}")
+    print(f"[Data] CSV exported to reports/{filename} (With Forecast)")
 
 # ---------------------------------------------------------
 # PLOTTING

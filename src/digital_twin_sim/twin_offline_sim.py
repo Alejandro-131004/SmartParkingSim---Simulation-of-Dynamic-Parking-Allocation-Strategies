@@ -200,7 +200,7 @@ class OfflineDigitalTwinSimulator:
             lot.delayed_exits_queue = 0.0
     
 
-    def run(self, policy_instance, forecaster_type="statistical"):
+    def run(self, policy_instance, forecaster_type="statistical", precomputed_forecast=None):
         import os  # Required for path correction
         print(f"[Twin] Initializing Full Digital Twin (Inputs/Exits Logic)...")
         
@@ -278,10 +278,15 @@ class OfflineDigitalTwinSimulator:
         self.traffic_avg_ref = forecaster.traffic_base_avg
         
         print(f"[Twin] Generating Forecast...")
-        if forecaster_type == "chronos":
+        if precomputed_forecast is not None:
+             print(f"[Twin] Using Precomputed Forecast ({len(precomputed_forecast)} rows).")
+             df_forecast = precomputed_forecast.copy()
+        elif forecaster_type == "chronos":
             # For Chronos, we pass the full dataframe (Ground Truth) to enable Rolling Forecast
-            # The adapter will use this to "reveal" data hour-by-hour
-            df_forecast = forecaster.predict(test_start, test_end, stochastic=True, ground_truth_df=df_full)
+            # DISABLE for speed (User requested run all tests, rolling is 5 hours)
+            # df_forecast = forecaster.predict(test_start, test_end, stochastic=True, ground_truth_df=df_full)
+            print("[Twin] Using Static Chronos Forecast (Fast Mode).")
+            df_forecast = forecaster.predict(test_start, test_end, stochastic=True, ground_truth_df=None)
         else:
             df_forecast = forecaster.predict(test_start, test_end, stochastic=True)
 
