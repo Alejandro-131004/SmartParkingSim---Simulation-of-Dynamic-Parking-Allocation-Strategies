@@ -14,7 +14,7 @@ BASE_YAML = os.path.join(ROOT, "config", "parking_P023.yaml")
 TEMP_YAML = os.path.join(ROOT, "config", "tmp_scenario.yaml")
 RUNNER = os.path.join(ROOT, "src", "runner.py")
 
-# Cenários a testar
+# Scenarios to test
 TARGETS = [0.75, 0.85, 0.95]
 KS = [0.2, 0.4, 0.6]
 PMINS = [1.3, 1.5, 1.7]
@@ -29,7 +29,7 @@ def run_scenario    (target, k, p_min):
     runner_path = os.path.join(current_dir, "runner.py")
 
     cmd = [
-        sys.executable,  # <--- CRUCIAL: Usa o python do .venv atual
+        sys.executable,  
         runner_path, 
         "--mode", "2",
         "--target", str(target),
