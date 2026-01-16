@@ -26,4 +26,4 @@ df['score'] = ((df['volume_max'] / df['global_street_max']) * 10).clip(0,10).rou
 grouped = df.groupby(['local','date','hour','latitude','longitude'], as_index=False)['score'].max()
 grouped.to_csv(output_file, index=False)
 
-print(f"✅ Saved traffic score per street per hour to {output_file}")
+print(f"Saved traffic score per street per hour to {output_file}")

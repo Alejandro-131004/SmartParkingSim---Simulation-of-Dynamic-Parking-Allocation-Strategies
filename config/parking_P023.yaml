@@ -19,11 +19,11 @@ twin_test_end:    "2022-06-30"
 ###############################################################
 policy: dynpricing
 
-target: 0.75       # antes 0.95
-k: 0.4              # antes 0.5
-p_min: 1.45          # antes 1.0
+target: 0.75       
+k: 0.4             
+p_min: 1.45          
 p_max: 3.0
-interval: 20        # antes 10
+interval: 20      
 
 ###############################################################
 # LOT CONFIGURATION

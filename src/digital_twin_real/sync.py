@@ -7,6 +7,5 @@ class TwinSynchronizer:
         env.now = real_state["current_hour"] * 60
 
         for lot in lots:
-            # colocar ocupação atual no SimPy
             lot.res.count = real_state["current_occupancy"]
             lot.last = env.now

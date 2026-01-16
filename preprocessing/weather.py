@@ -19,4 +19,4 @@ df = df[(df['temperatura'] >= -20) & (df['temperatura'] <= 50)]
 daily = df.groupby('dia')['temperatura'].agg(temp_min='min', temp_max='max').reset_index()
 
 daily.to_csv(output_daily_file, index=False)
-print(f"✅ Saved daily temperature for station 1 to {output_daily_file}")
+print(f"Saved daily temperature for station 1 to {output_daily_file}")

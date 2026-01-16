@@ -22,10 +22,10 @@ class TwinLot:
         self.last = 0
         self.occ_time = 0.0
         
-        # Variáveis de Estado de Fluxo
+        # Flow State Variables
         self.current_base_entries = 0.0
         self.current_actual_entries = 0.0
-        # Novo: Acumulador de carros que queriam sair mas ficaram presos no trânsito
+        # New: Hoarder of cars that wanted to leave but got stuck in traffic.
         self.delayed_exits_queue = 0.0
 
     def occ_update(self, env):
@@ -168,7 +168,7 @@ class OfflineDigitalTwinSimulator:
 
             if base_price > 0:
                 price_ratio = lot.price / base_price
-                price_factor = self._calculate_sigmoid_elasticity(price_ratio, k=2.0, weather_score=weather_score)
+                price_factor = self._calculate_sigmoid_elasticity(price_ratio, k=elast_price, weather_score=weather_score)
 
             # Traffic elasticity
             traffic_factor = 1.0

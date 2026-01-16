@@ -20,19 +20,19 @@ print("==============================================\n")
 # ---------------------------------------------------------
 
 t = time.time()
-print("[1/10] A carregar dataset principal...")
+print("[1/10] Loading main dataset...")
 df = pd.read_csv("data/dataset_fluxos_hourly_2022.csv")
-t = checkpoint("data/dataset_fluxos_hourly_2022 carregado", t)
+t = checkpoint("data/dataset_fluxos_hourly_2022 loaded", t)
 
-print("[2/10] A carregar Excel dos parques (com coordenadas)...")
+print("[2/10] Loading parking Excel file (with coordinates)...")
 parks_raw = pd.read_excel("parques-estacionamento-1s-2022.xlsx")
-t = checkpoint("Excel dos parques carregado", t)
+t = checkpoint("Parking Excel loaded", t)
 
 # ---------------------------------------------------------
 # 2. Normalize columns + extract coordinates from `position`
 # ---------------------------------------------------------
 
-print("[3/10] A normalizar colunas e extrair coordenadas...")
+print("[3/10] Normalizing columns and extracting coordinates...")
 df.columns = df.columns.str.strip().str.lower()
 parks_raw.columns = parks_raw.columns.str.strip().str.lower()
 
@@ -56,13 +56,13 @@ coords_df = (
     .rename(columns={"id_parque": "parking_lot"})
 )
 
-t = checkpoint("Coordenadas extraídas", t)
+t = checkpoint("Coordinates extracted", t)
 
 # ---------------------------------------------------------
 # 3. Detect invalid parks (negative occupancy or frozen >20h)
 # ---------------------------------------------------------
 
-print("[4/10] A identificar parques inválidos (valores negativos e períodos constantes)...")
+print("[4/10] Identifying invalid parks (negative values and constant periods)...")
 
 df = df.sort_values(["parking_lot", "date", "hour"]).reset_index(drop=True)
 
@@ -83,17 +83,17 @@ for lot, g in df.groupby("parking_lot"):
 
 bad_parks = set(bad_neg) | set(bad_constant)
 
-print(f"   -> Parques com occupancy < 0: {len(bad_neg)}")
-print(f"   -> Parques com >20h constantes: {len(bad_constant)}")
-print(f"   -> TOTAL parques inválidos removidos: {len(bad_parks)}")
+print(f"   -> Parks with occupancy < 0: {len(bad_neg)}")
+print(f"   -> Parks with >20h constant occupancy: {len(bad_constant)}")
+print(f"   -> TOTAL invalid parks removed: {len(bad_parks)}")
 
-t = checkpoint("Parques inválidos identificados", t)
+t = checkpoint("Invalid parks identified", t)
 
 # ---------------------------------------------------------
 # 4. Filter & compute variance
 # ---------------------------------------------------------
 
-print("[5/10] A filtrar parques válidos e calcular variâncias...")
+print("[5/10] Filtering valid parks and computing variances...")
 
 df_valid = df[~df["parking_lot"].isin(bad_parks)].copy()
 df_valid["date"] = pd.to_datetime(df_valid["date"]).dt.date
@@ -115,13 +115,13 @@ variance_df["variance_percent"] = (
     variance_df["variance"] / variance_df["mean_occupancy"] * 100
 )
 
-t = checkpoint("Variâncias calculadas", t)
+t = checkpoint("Variances computed", t)
 
 # ---------------------------------------------------------
 # 5. EXTRA STEP — missing hours per park + missing_days
 # ---------------------------------------------------------
 
-print("[6/10] A verificar horas faltantes por parque...")
+print("[6/10] Checking missing hours per park...")
 
 expected_hours = set(range(24))
 missing_info = {}
@@ -148,13 +148,13 @@ missing_df = pd.DataFrame({
     "missing_days": [missing_days_count[lot] for lot in missing_info]
 })
 
-t = checkpoint("Horas faltantes identificadas", t)
+t = checkpoint("Missing hours identified", t)
 
 # ---------------------------------------------------------
 # 6. Add capacity
 # ---------------------------------------------------------
 
-print("[7/10] A adicionar capacidade dos parques...")
+print("[7/10] Adding parking capacities...")
 
 capacity_map = {
     "P064": 248,
@@ -168,45 +168,45 @@ capacity_df = pd.DataFrame({
     "capacity": list(capacity_map.values())
 })
 
-t = checkpoint("Capacidades adicionadas", t)
+t = checkpoint("Capacities added", t)
 
 # ---------------------------------------------------------
 # 7. Merge everything (coords + missing hours + capacity)
 # ---------------------------------------------------------
 
-print("[8/10] A juntar coordenadas, missing_hours e capacidade...")
+print("[8/10] Merging coordinates, missing hours, and capacity...")
 
 final_df = variance_df.merge(coords_df, on="parking_lot", how="left")
 final_df = final_df.merge(missing_df, on="parking_lot", how="left")
 final_df = final_df.merge(capacity_df, on="parking_lot", how="left")
 
-t = checkpoint("Dados combinados", t)
+t = checkpoint("Data merged", t)
 
 # ---------------------------------------------------------
 # 8. FIX lat/lon types (critical fix)
 # ---------------------------------------------------------
 
-print("[8.1] A converter lat/lon para float...")
+print("[8.1] Converting lat/lon to float...")
 
 final_df["lat"] = pd.to_numeric(final_df["lat"], errors="coerce")
 final_df["lon"] = pd.to_numeric(final_df["lon"], errors="coerce")
 
-print(final_df[["parking_lot", "lat", "lon"]])  # debug opcional
+print(final_df[["parking_lot", "lat", "lon"]])  # optional debug
 
-t = checkpoint("lat/lon convertidos", t)
+t = checkpoint("lat/lon converted", t)
 
 # ---------------------------------------------------------
 # 9. Distance to interest points
 # ---------------------------------------------------------
 
-print("[9/10] A calcular distâncias corretas...")
+print("[9/10] Computing distances...")
 
 interest_points = {
     "Avenida da Republica": (38.7485, -9.1487),
     "Avenida das Forças Armadas": (38.7394, -9.1525),
     "Avenida de Berlim": (38.7672, -9.1032),
-    "Calçada de Carriche": (38.7707, -9.1529),
-    "Marquês de Pombal": (38.7253, -9.1502),
+    "Calcada de Carriche": (38.7707, -9.1529),
+    "Marques de Pombal": (38.7253, -9.1502),
     "Restauradores": (38.7142, -9.1376)
 }
 
@@ -216,7 +216,7 @@ def haversine(lat1, lon1, lat2, lon2):
     R = 6371
     dlat = radians(lat2 - lat1)
     dlon = radians(lon2 - lon1)
-    a = sin(dlat/2)**2 + cos(radians(lat1))*cos(radians(lat2))*sin(dlon/2)**2
+    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
     return R * 2 * atan2(sqrt(a), sqrt(1 - a))
 
 closest_place = []
@@ -240,20 +240,23 @@ for _, row in final_df.iterrows():
 final_df["closest_place"] = closest_place
 final_df["distance_km"] = closest_dist
 
-t = checkpoint("Distâncias calculadas corretamente", t)
+t = checkpoint("Distances computed", t)
 
 # ---------------------------------------------------------
 # 10. Final sorting & saving
 # ---------------------------------------------------------
 
-print("[10/10] A gerar ficheiro final parking_selection.csv...")
+print("[10/10] Generating final file parking_selection.csv...")
 
-final_df = final_df.sort_values(["distance_km", "variance_percent"], ascending=[True, False])
+final_df = final_df.sort_values(
+    ["distance_km", "variance_percent"],
+    ascending=[True, False]
+)
 final_df.to_csv("parking_selection.csv", index=False)
 
-t = checkpoint("CSV final gerado", t)
+t = checkpoint("Final CSV generated", t)
 
 print("\n==============================================")
-print("       PROCESSO CONCLUÍDO COM SUCESSO!")
-print("       -> Resultado: parking_selection.csv")
+print("       PROCESS COMPLETED SUCCESSFULLY!")
+print("       -> Output: parking_selection.csv")
 print("==============================================\n")

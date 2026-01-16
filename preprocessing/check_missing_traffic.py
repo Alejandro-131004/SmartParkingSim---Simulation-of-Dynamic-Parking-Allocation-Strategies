@@ -14,7 +14,7 @@ print("[1/4] Loading data...")
 df = pd.read_csv(DATASET_PATH)
 traffic = pd.read_csv(TRAFFIC_PATH)
 
-# Normalizar colunas
+# Normalize column names
 df.columns = df.columns.str.lower()
 traffic.columns = traffic.columns.str.lower()
 
@@ -33,21 +33,21 @@ missing = df[df["traffic_score"].isna()]
 
 print(f"[INFO] Missing traffic_score rows: {len(missing)}")
 
-# Missing por dia
+# Missing by day
 missing_by_day = (
     missing.groupby(missing["date"].dt.date)
     .size()
     .reset_index(name="missing_rows")
 )
 
-# Missing por hora (global)
+# Missing by hour (global)
 missing_by_hour = (
     missing.groupby("hour")
     .size()
     .reset_index(name="missing_count")
 )
 
-# Mostrar resumo
+# Show summary
 print("\n===== Missing Traffic Score by Day =====")
 print(missing_by_day.to_string(index=False))
 
@@ -75,7 +75,7 @@ print("\n===== Missing Days vs Traffic File Availability =====")
 print(missing_check.to_string(index=False))
 
 
-# Dias completamente ausentes do ficheiro de tráfego
+# Days completely absent from the traffic file
 missing_days_no_data = (
     missing_check[missing_check["exists_in_traffic_file"] == False]["day"].unique()
 )
