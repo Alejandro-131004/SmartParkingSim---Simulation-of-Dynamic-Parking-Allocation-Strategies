@@ -102,7 +102,7 @@ class DynamicPricingBalanced:
                 forecast_occ = predict_future_occupancy(L, horizon=60)
                 
                 # ---------------------------------------------------------
-                # 2. REVENUE GUARDRAIL CHECK (O que faltava no teu código)
+                # 2. REVENUE GUARDRAIL CHECK 
                 # ---------------------------------------------------------
                 # Logic: If we raised price, but revenue dropped, revert immediately.
                 guard_triggered = False
@@ -166,7 +166,6 @@ class MCTSPricing:
         
     def set_forecast(self, df_forecast):
         from mcts_agent import MCTSAgent
-        # FIX: Injecting the correct constraints into the Agent
         self.agent = MCTSAgent(
             forecast_df=df_forecast, 
             planning_horizon=60, 
